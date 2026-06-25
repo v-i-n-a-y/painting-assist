@@ -1,0 +1,24 @@
+[project]
+name = "painting-assist"
+version = "0.2.0"
+description = "Squint — a coarse-to-fine painting reference tool"
+requires-python = ">=3.9"
+dependencies = [
+    # PySide6 pinned to 6.8.1.1: 6.11.x fails to load its Qt platform plugins
+    # under the bundled macOS interpreters.
+    "pyside6==6.8.1.1",
+    "numpy",
+    "opencv-python",
+    "Pillow",
+]
+
+[project.scripts]
+squint = "painting_assist.app:main"
+painting-assist = "painting_assist.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["painting_assist"]
