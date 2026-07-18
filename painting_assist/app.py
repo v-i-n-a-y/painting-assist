@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Application bootstrap.
 
@@ -6,6 +6,8 @@ Importing :mod:`painting_assist.controls` runs the ``@register`` decorators in
 each concrete control module, populating the registry *before*
 ``registry.create_all()`` is invoked inside :class:`MainWindow`.
 """
+
+from __future__ import annotations
 
 import os
 import sys

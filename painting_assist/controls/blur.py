@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import List, Optional

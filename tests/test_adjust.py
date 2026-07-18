@@ -1,6 +1,8 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """ToneControl: contrast/saturation/temperature adjustments in RGB/Lab space."""
+
+from __future__ import annotations
 
 import cv2
 import numpy as np
@@ -70,8 +72,9 @@ def test_saturation_minus_one_is_greyscale():
     c.set("saturation", -1.0)
     out = c.process(img.copy())
     # R, G, B collapse to (near) equal -> greyscale.
-    max_channel_spread = np.abs(out.astype(np.int16).max(axis=2)
-                                - out.astype(np.int16).min(axis=2)).max()
+    max_channel_spread = np.abs(
+        out.astype(np.int16).max(axis=2) - out.astype(np.int16).min(axis=2)
+    ).max()
     assert max_channel_spread <= 3
 
 

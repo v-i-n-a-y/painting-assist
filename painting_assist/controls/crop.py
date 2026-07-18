@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import List, Optional
@@ -74,14 +76,42 @@ class CropControl(Control):
                 tooltip="On: crop is locked to the canvas ratio. Off: freeform crop.",
             ),
             # Normalised crop rectangle (fractions of the original image).
-            Param(name="rx", label="X", ptype=ParamType.FLOAT,
-                  default=0.0, minimum=0.0, maximum=1.0, step=0.0001),
-            Param(name="ry", label="Y", ptype=ParamType.FLOAT,
-                  default=0.0, minimum=0.0, maximum=1.0, step=0.0001),
-            Param(name="rw", label="W", ptype=ParamType.FLOAT,
-                  default=1.0, minimum=0.0, maximum=1.0, step=0.0001),
-            Param(name="rh", label="H", ptype=ParamType.FLOAT,
-                  default=1.0, minimum=0.0, maximum=1.0, step=0.0001),
+            Param(
+                name="rx",
+                label="X",
+                ptype=ParamType.FLOAT,
+                default=0.0,
+                minimum=0.0,
+                maximum=1.0,
+                step=0.0001,
+            ),
+            Param(
+                name="ry",
+                label="Y",
+                ptype=ParamType.FLOAT,
+                default=0.0,
+                minimum=0.0,
+                maximum=1.0,
+                step=0.0001,
+            ),
+            Param(
+                name="rw",
+                label="W",
+                ptype=ParamType.FLOAT,
+                default=1.0,
+                minimum=0.0,
+                maximum=1.0,
+                step=0.0001,
+            ),
+            Param(
+                name="rh",
+                label="H",
+                ptype=ParamType.FLOAT,
+                default=1.0,
+                minimum=0.0,
+                maximum=1.0,
+                step=0.0001,
+            ),
         ]
 
     # ------------------------------------------------------------------ #

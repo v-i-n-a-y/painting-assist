@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import Optional
@@ -9,7 +11,7 @@ from PySide6.QtCore import QObject, Signal
 class ImageModel(QObject):
     """QObject holding ONLY the immutable original RGB array; emits on load."""
 
-    image_loaded = Signal()            # emitted after a new original is set
+    image_loaded = Signal()  # emitted after a new original is set
 
     def __init__(self) -> None:
         super().__init__()

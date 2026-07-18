@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 """Headless-ish GUI smoke test: construct the window, drive the crop-edit flow.
 
 Run with the project's framework Python:  uv run python tests/test_gui_smoke.py

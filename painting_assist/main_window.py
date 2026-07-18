@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Top-level window: builds and wires everything, owns the toolbar.
 
@@ -9,6 +9,8 @@ a little control-specific glue is the **crop** tool: an interactive viewport
 overlay genuinely needs view-level cooperation that a pure pixel filter does
 not. That glue is opt-in and degrades gracefully if no ``crop`` control exists.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -363,9 +365,7 @@ class MainWindow(QMainWindow):
             return
         for path in self._recent:
             act = menu.addAction(path)
-            act.triggered.connect(
-                lambda _checked=False, p=path: self._open_recent(p)
-            )
+            act.triggered.connect(lambda _checked=False, p=path: self._open_recent(p))
         menu.addSeparator()
         clear = menu.addAction("Clear Recent")
         clear.triggered.connect(self._clear_recent)
@@ -379,7 +379,8 @@ class MainWindow(QMainWindow):
         """Open a path chosen from the Open Recent menu (prune it if it's gone)."""
         if not os.path.exists(path):
             QMessageBox.information(
-                self, "File missing",
+                self,
+                "File missing",
                 "That file is no longer available:\n{}".format(path),
             )
             self._recent = prune_recent(self._recent)
@@ -408,9 +409,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             f"About {APP_NAME}",
-            f"<b>{APP_NAME}</b><br>"
-            f"Version {__version__}<br><br>"
-            f"Author: {__author__}",
+            f"<b>{APP_NAME}</b><br>Version {__version__}<br><br>Author: {__author__}",
         )
 
     def _on_shortcuts(self) -> None:
@@ -562,7 +561,8 @@ class MainWindow(QMainWindow):
         """No newer release; only worth saying when the user asked explicitly."""
         if self._manual_update_check:
             QMessageBox.information(
-                self, "Up to date",
+                self,
+                "Up to date",
                 "You are on the latest version ({}).".format(version),
             )
 
@@ -583,7 +583,8 @@ class MainWindow(QMainWindow):
             updater.open_installer(path)
         except Exception as exc:  # pragma: no cover - OS/handler error path
             QMessageBox.warning(
-                self, "Could not open installer",
+                self,
+                "Could not open installer",
                 "Downloaded to {} but could not open it:\n{}".format(path, exc),
             )
             return
@@ -729,9 +730,7 @@ class MainWindow(QMainWindow):
         paths on some platforms; encoding then writing ourselves avoids that.
         """
         ext = os.path.splitext(path)[1] or ".png"
-        bgr = cv2.cvtColor(
-            np.ascontiguousarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2BGR
-        )
+        bgr = cv2.cvtColor(np.ascontiguousarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2BGR)
         ok, buf = cv2.imencode(ext, bgr)
         if not ok:
             raise IOError("cv2.imencode failed (unsupported extension %r?)" % ext)
@@ -796,13 +795,15 @@ class MainWindow(QMainWindow):
                 written += 1
         except Exception as exc:  # pragma: no cover - GUI error path
             QMessageBox.critical(
-                self, "Export failed",
+                self,
+                "Export failed",
                 "Wrote {} of {} steps before an error:\n{}".format(written, count, exc),
             )
             return
 
         QMessageBox.information(
-            self, "Export complete",
+            self,
+            "Export complete",
             "Wrote {} blur-step images to:\n{}".format(written, directory),
         )
 
@@ -941,7 +942,9 @@ class MainWindow(QMainWindow):
 
         self._crop_editing = True
         self._view.set_image(original, preserve_view=True)
-        self._view.begin_crop(self._crop_control.rect_norm(), self._crop_control.aspect())
+        self._view.begin_crop(
+            self._crop_control.rect_norm(), self._crop_control.aspect()
+        )
         self.statusBar().showMessage(
             "Drag the box to frame your crop; click Apply crop when done.", 6000
         )
@@ -1125,8 +1128,7 @@ class MainWindow(QMainWindow):
         settings.setValue("window/state", self.saveState())
 
         states = {
-            control.id: control.to_state()
-            for control in self._pipeline.controls()
+            control.id: control.to_state() for control in self._pipeline.controls()
         }
         settings.setValue("session/controls", json.dumps(states))
         settings.setValue("session/last_image", self._model.path() or "")

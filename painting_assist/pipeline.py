@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -41,7 +43,9 @@ class ControlPipeline:
         """Default: registry.create_all(). Stores controls in given (registry) order,
         a per-stage cache (one slot per stage), and the id() of the base image.
         """
-        self._controls: List[Control] = controls if controls is not None else create_all()
+        self._controls: List[Control] = (
+            controls if controls is not None else create_all()
+        )
         self._by_id: Dict[str, Control] = {c.id: c for c in self._controls}
         self._cache: List[Optional[_CacheEntry]] = [None] * len(self._controls)
         self._base_token: Optional[Any] = None
@@ -212,9 +216,7 @@ class ControlPipeline:
             return out
 
         state = states[control.id]
-        out, meta = control.process_snapshot_meta(
-            current, state.enabled, state.values
-        )
+        out, meta = control.process_snapshot_meta(current, state.enabled, state.values)
         if meta:
             stage_meta.update(meta)
         return out

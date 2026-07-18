@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Interactive crop rectangle drawn over the image in the viewport.
 
@@ -12,6 +12,8 @@ handles. Geometry is reported via :attr:`rectChanged` in image-pixel
 coordinates; the view converts to normalised fractions for the control.
 """
 
+from __future__ import annotations
+
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -20,7 +22,7 @@ from PySide6.QtWidgets import QGraphicsObject
 
 
 # Handle identifiers.
-_TL, _TR, _BR, _BL = "tl", "tr", "br", "bl"          # corners
+_TL, _TR, _BR, _BL = "tl", "tr", "br", "bl"  # corners
 _TOP, _RIGHT, _BOTTOM, _LEFT = "top", "right", "bottom", "left"  # edges
 _CORNERS = (_TL, _TR, _BR, _BL)
 _EDGES = (_TOP, _RIGHT, _BOTTOM, _LEFT)
@@ -31,15 +33,17 @@ class CropItem(QGraphicsObject):
 
     rectChanged = Signal(QRectF)  # current crop rect in image-pixel coords
 
-    HANDLE_PX = 9.0    # on-screen handle half-size (constant regardless of zoom)
-    MIN_SIZE = 16.0    # minimum crop size in image pixels
+    HANDLE_PX = 9.0  # on-screen handle half-size (constant regardless of zoom)
+    MIN_SIZE = 16.0  # minimum crop size in image pixels
 
-    def __init__(self, image_rect: QRectF, parent: Optional[QGraphicsObject] = None) -> None:
+    def __init__(
+        self, image_rect: QRectF, parent: Optional[QGraphicsObject] = None
+    ) -> None:
         super().__init__(parent)
         self._image_rect = QRectF(image_rect)
         self._rect = QRectF(image_rect)
         self._aspect: Optional[float] = None
-        self._mode: Optional[str] = None      # None | "move" | handle id
+        self._mode: Optional[str] = None  # None | "move" | handle id
         self._press_pos = QPointF()
         self._press_rect = QRectF()
 
@@ -192,12 +196,14 @@ class CropItem(QGraphicsObject):
             _BL: QPointF(r.left(), r.bottom()),
         }
         if self._aspect is None:
-            centers.update({
-                _TOP: QPointF(cx, r.top()),
-                _RIGHT: QPointF(r.right(), cy),
-                _BOTTOM: QPointF(cx, r.bottom()),
-                _LEFT: QPointF(r.left(), cy),
-            })
+            centers.update(
+                {
+                    _TOP: QPointF(cx, r.top()),
+                    _RIGHT: QPointF(r.right(), cy),
+                    _BOTTOM: QPointF(cx, r.bottom()),
+                    _LEFT: QPointF(r.left(), cy),
+                }
+            )
         return centers
 
     def _zone_at(self, pos: QPointF) -> Optional[str]:

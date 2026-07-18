@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Theme module: pure parts only.
 
@@ -7,6 +7,8 @@ can be built without a QApplication, so these run headless. Anything needing a
 real QGuiApplication (a platform plugin) is out of scope here — see
 tests/conftest.py for how the suite treats headless limits.
 """
+
+from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
@@ -58,13 +60,19 @@ def _has_role(p, group, role, expected_hex):
 def test_dark_palette_key_colours():
     p = theme.dark_palette()
     assert isinstance(p, QPalette)
-    assert _has_role(p, QPalette.ColorGroup.Active, QPalette.ColorRole.Window, "#2b2b2b")
+    assert _has_role(
+        p, QPalette.ColorGroup.Active, QPalette.ColorRole.Window, "#2b2b2b"
+    )
     assert _has_role(p, QPalette.ColorGroup.Active, QPalette.ColorRole.Base, "#1e1e1e")
-    assert _has_role(p, QPalette.ColorGroup.Active, QPalette.ColorRole.Highlight, "#3874f2")
+    assert _has_role(
+        p, QPalette.ColorGroup.Active, QPalette.ColorRole.Highlight, "#3874f2"
+    )
     # Text is light on dark.
     assert p.color(QPalette.ColorRole.Text).lightness() > 180
     # Disabled group is populated (the common miss).
-    assert _has_role(p, QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, "#6e6e6e")
+    assert _has_role(
+        p, QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, "#6e6e6e"
+    )
 
 
 def test_light_palette_key_colours():
@@ -73,14 +81,25 @@ def test_light_palette_key_colours():
     assert _has_role(p, QPalette.ColorGroup.Active, QPalette.ColorRole.Base, "#ffffff")
     # Text is dark on light.
     assert p.color(QPalette.ColorRole.Text).lightness() < 80
-    assert _has_role(p, QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, "#a0a0a0")
+    assert _has_role(
+        p, QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, "#a0a0a0"
+    )
 
 
 def test_build_palette_dispatch():
-    assert theme.build_palette("dark").color(QPalette.ColorRole.Window).name().lower() == "#2b2b2b"
-    assert theme.build_palette("light").color(QPalette.ColorRole.Base).name().lower() == "#ffffff"
+    assert (
+        theme.build_palette("dark").color(QPalette.ColorRole.Window).name().lower()
+        == "#2b2b2b"
+    )
+    assert (
+        theme.build_palette("light").color(QPalette.ColorRole.Base).name().lower()
+        == "#ffffff"
+    )
     # Non-"dark" falls back to light.
-    assert theme.build_palette("anything").color(QPalette.ColorRole.Base).name().lower() == "#ffffff"
+    assert (
+        theme.build_palette("anything").color(QPalette.ColorRole.Base).name().lower()
+        == "#ffffff"
+    )
 
 
 def test_palettes_are_fresh_each_call():
@@ -96,16 +115,27 @@ def test_all_dark_roles_present():
     # disabled group covers the common-miss roles.
     p = theme.dark_palette()
     roles = [
-        QPalette.ColorRole.Window, QPalette.ColorRole.WindowText,
-        QPalette.ColorRole.Base, QPalette.ColorRole.AlternateBase,
-        QPalette.ColorRole.ToolTipBase, QPalette.ColorRole.ToolTipText,
-        QPalette.ColorRole.Text, QPalette.ColorRole.PlaceholderText,
-        QPalette.ColorRole.Button, QPalette.ColorRole.ButtonText,
-        QPalette.ColorRole.BrightText, QPalette.ColorRole.Highlight,
-        QPalette.ColorRole.HighlightedText, QPalette.ColorRole.Link,
+        QPalette.ColorRole.Window,
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.Base,
+        QPalette.ColorRole.AlternateBase,
+        QPalette.ColorRole.ToolTipBase,
+        QPalette.ColorRole.ToolTipText,
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.PlaceholderText,
+        QPalette.ColorRole.Button,
+        QPalette.ColorRole.ButtonText,
+        QPalette.ColorRole.BrightText,
+        QPalette.ColorRole.Highlight,
+        QPalette.ColorRole.HighlightedText,
+        QPalette.ColorRole.Link,
     ]
     for role in roles:
         assert p.color(QPalette.ColorGroup.Active, role).isValid()
-    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText,
-                 QPalette.ColorRole.WindowText, QPalette.ColorRole.Highlight):
+    for role in (
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.ButtonText,
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.Highlight,
+    ):
         assert p.color(QPalette.ColorGroup.Disabled, role).isValid()

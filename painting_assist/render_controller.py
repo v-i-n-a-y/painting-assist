@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """The responsiveness layer — the single, decided rendering approach.
 
@@ -18,6 +18,8 @@ mechanisms, implemented exactly one way:
    stamps each task; results with a stale generation are dropped. Only one task
    is in flight at a time, so the pipeline cache needs no locking.
 """
+
+from __future__ import annotations
 
 import logging
 
@@ -104,9 +106,7 @@ class _RenderTask(QRunnable):
             _log.exception("Render task failed (generation %d)", self._generation)
             self._signals.done.emit(None, self._generation, was_full, self._scale, None)
             return
-        self._signals.done.emit(
-            out, self._generation, was_full, self._scale, metadata
-        )
+        self._signals.done.emit(out, self._generation, was_full, self._scale, metadata)
 
     @staticmethod
     def _downscale(src: np.ndarray, scale: float) -> np.ndarray:

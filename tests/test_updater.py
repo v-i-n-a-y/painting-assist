@@ -1,10 +1,12 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Unit tests for the pure helpers in :mod:`painting_assist.updater`.
 
 These cover version parsing/comparison and per-platform asset selection. They
 touch no network and need no QApplication (the pure helpers are Qt-free).
 """
+
+from __future__ import annotations
 
 from painting_assist.updater import is_newer, parse_version, pick_asset
 
@@ -76,9 +78,7 @@ def _assets():
         "PaintingAssist-0.4.0-linux-x86_64.AppImage",
         "PaintingAssist-0.4.0-linux-x86_64.tar.gz",
     ]
-    return [
-        {"name": n, "browser_download_url": "https://example/" + n} for n in names
-    ]
+    return [{"name": n, "browser_download_url": "https://example/" + n} for n in names]
 
 
 def test_pick_asset_macos_arm64():

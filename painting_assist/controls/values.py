@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import List
@@ -158,8 +160,9 @@ class ValuesControl(Control):
             keep_idx = min(isolate, steps) - 1
             mask = band == keep_idx
             grey = np.full_like(out, self.NEUTRAL)
-            dimmed = np.round(0.25 * out.astype(np.float32)
-                              + 0.75 * grey.astype(np.float32))
+            dimmed = np.round(
+                0.25 * out.astype(np.float32) + 0.75 * grey.astype(np.float32)
+            )
             dimmed = dimmed.astype(np.uint8)
             out = np.where(mask[:, :, None], out, dimmed)
 

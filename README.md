@@ -1,82 +1,86 @@
 # Painting Assist
 
-A coarse-to-fine painting **reference** tool. You load a reference photo and
-manipulate how it is *displayed* — never the original — so you can paint from a
-deliberately processed view of it. The name is what painters do: squint to
-collapse a scene into its big value masses before refining detail.
+A coarse to fine painting reference tool. You load a reference photo and change
+how it is shown on screen, never the original, so you can paint from a
+deliberately processed view of it. The idea mirrors what painters already do at
+the easel, squinting to collapse a scene into its big value masses before any
+detail goes in.
 
-Everything is non-destructive: the original is held untouched in memory,
-controls are applied as a live pipeline on top of it, **Reset** restores the
-clean view, and **Save** writes out the *processed* image (what you currently
-see).
+Nothing is destructive. The original photo is held untouched in memory, the
+controls apply as a live pipeline on top of it, Reset restores the clean view,
+and Save writes out the processed image you are currently looking at.
 
 ## Controls
 
-### Blur — block coarse → fine
-The flagship control, in two modes:
+### Blur, block coarse to fine
 
-- **Continuous** — a reversed **Detail** slider. Left = heavy blur (block in
-  values and shapes first); drag right toward 0 to reveal fine detail as your
-  painting progresses. "More progress" maps to "move right".
-- **Stepped** — a fixed ladder of discrete blur **set-points** you step through
-  with **◀ Prev / Stage k of N / Next ▶** (or the jump slider). Choose the
-  number of stages, then either:
-  - **Even** — set the heaviest blur (Stage 1) and the rest are spaced evenly
-    down to sharp; or
-  - **Manual** — type each stage's blur level into its own box.
+The main control, in two modes.
 
-  Working stage by stage keeps you honest: nail the big blocking at Stage 1
-  before letting any detail in.
+- Continuous is a reversed Detail slider. Far left is a heavy blur, so you
+  block in values and shapes first, and dragging back towards zero reveals fine
+  detail as the painting progresses. More progress maps to moving right.
+- Stepped is a fixed ladder of discrete blur set-points that you step through
+  with Prev and Next (or the jump slider). Choose how many stages you want, then
+  either let Even space them from the heaviest blur at Stage 1 down to sharp, or
+  use Manual and type each stage's blur level yourself. Working one stage at a
+  time keeps you honest, since you have to settle the big blocking at Stage 1
+  before any detail is allowed in.
 
-### Tone — judge temperature and contrast
-Global **contrast**, **saturation** and **temperature** knobs, all neutral at
-zero. Runs early in the pipeline (right after the crop), so the value and
-colour-group tools below see the adjusted image. Warm/cool shifts are done in
-Lab space, which keeps them perceptually honest.
+### Tone, judge temperature and contrast
 
-### Colour groups — flat colour masses
-Reduces the reference to a handful of flat colour masses (Lab k-means), like a
-poster study — set the number of **colours** and an optional **smooth** to
-consolidate speckle before grouping. The colours it finds appear as clickable
-swatches in the **Palette** panel below the image: click one to copy its hex
-and read its value %, hue angle and chroma.
+Global contrast, saturation and temperature knobs, all neutral at zero. Tone
+runs early in the pipeline, right after the crop, so the value and colour-group
+tools further down see the adjusted image. Warm and cool shifts happen in Lab
+space, which keeps them perceptually honest.
 
-### Values — the value story
-- **Greyscale** — replace colour with neutral grey of the same perceptual
-  lightness, a pure value study. Toggle it any time with **V**.
-- **Value steps** — posterize lightness into 2–8 flat bands (2–3 = notan);
-  **Keep colour** posterizes the values but keeps each pixel's hue
-  (value-grouped colour, useful in the mid layers).
-- **Isolate band** — dim everything outside one chosen value band so you can
-  study a single value mass at a time.
+### Colour groups, flat colour masses
 
-### Eyedropper — read any colour
-Press **I** (or the toolbar button), then click the image to read the colour
-you are actually looking at — hex, RGB, value %, hue and chroma appear in the
-status bar and the Palette panel. Handy for checking a mix against the
-processed reference.
+Reduces the reference to a handful of flat colour masses with Lab k-means, much
+like a poster study. Set the number of colours and an optional smooth to
+consolidate speckle before grouping. The colours it settles on show up as
+clickable swatches in the Palette panel below the image. Click one to copy its
+hex and read its value percentage, hue angle and chroma.
 
-### Grid — position by the grid method
-An even **columns × rows** grid to transfer proportions and placement onto a
-matching grid on your canvas. Pick the colour, opacity and line width, and
-optionally add corner-to-corner **diagonals** to find the centre. The grid is a
-**viewer overlay** — crisp at any zoom, never baked into the processed pixels —
-and when you Save or export with it showing, you're asked whether to draw it
-into the file (so you can still print a gridded reference).
+### Values, the value story
 
-### Canvas & Crop — match your surface
-Enter your canvas' **width × height** (any unit — only the ratio matters). With
-**Lock to canvas ratio** on, click **Adjust crop region…** and an aspect-locked
-box appears over the reference: drag to move, drag the corners to resize (it
-keeps your canvas proportions), then **Apply crop**. Turn the lock **off** for a
-**freeform** crop of any shape. **Clear crop** restores the full frame. The crop
-is stored as fractions of the image, so it is resolution-independent and fully
-non-destructive.
+- Greyscale replaces colour with a neutral grey of the same perceptual
+  lightness, giving a pure value study. Toggle it at any time with V.
+- Value steps posterizes lightness into 2 to 8 flat bands, with 2 or 3 giving a
+  notan. Keep colour posterizes the values but holds each pixel's hue, which is
+  the value-grouped colour that helps in the mid layers.
+- Isolate band dims everything outside one chosen value band, so you can study a
+  single value mass on its own.
+
+### Eyedropper, read any colour
+
+Press I (or use the toolbar button), then click the image to read the colour you
+are actually looking at. The hex, RGB, value percentage, hue and chroma appear
+in the status bar and the Palette panel, which is handy for checking a mix
+against the processed reference.
+
+### Grid, position by the grid method
+
+An even columns by rows grid to transfer proportions and placement onto a
+matching grid on your canvas. Pick the colour, opacity and line width, and add
+corner-to-corner diagonals if you want to find the centre. The grid is a viewer
+overlay, so it stays crisp at any zoom and is never baked into the processed
+pixels. When you Save or export with it showing, the app asks whether to draw it
+into the file, so you can still print a gridded reference.
+
+### Canvas and Crop, match your surface
+
+Enter your canvas width and height in any unit, since only the ratio matters.
+With Lock to canvas ratio on, click Adjust crop region and an aspect-locked box
+appears over the reference. Drag it to move, drag the corners to resize while it
+holds your canvas proportions, then click Apply crop. Turn the lock off for a
+freeform crop of any shape, and use Clear crop to restore the full frame. The
+crop is stored as fractions of the image, so it is resolution-independent and
+fully non-destructive.
 
 ## Install
 
 Prebuilt installers for each release are on the
-[**Releases**](https://github.com/v-i-n-a-y/painting-assist/releases) page:
+[Releases](https://github.com/v-i-n-a-y/painting-assist/releases) page.
 
 | Platform      | Download                                                       |
 | ------------- | ------------------------------------------------------------- |
@@ -85,35 +89,37 @@ Prebuilt installers for each release are on the
 | Windows       | `PaintingAssist-<version>-windows-x64-setup.exe`              |
 | Linux         | `PaintingAssist-<version>-linux-x86_64.AppImage` (or `.tar.gz`)|
 
-- **macOS** — open the DMG and drag *Painting Assist* to Applications. The build
-  is unsigned, so on first launch right-click the app and choose **Open**.
-- **Windows** — run the setup `.exe` (installs to Program Files, with Start Menu
-  and optional desktop shortcuts).
-- **Linux** — `chmod +x` the AppImage and run it, or extract the `.tar.gz` and
-  run the `PaintingAssist` binary inside.
+- On macOS, open the DMG and drag Painting Assist to Applications. The build is
+  unsigned, so on first launch you need to right-click the app and choose Open.
+- On Windows, run the setup `.exe`. It installs to Program Files with Start Menu
+  and optional desktop shortcuts.
+- On Linux, mark the AppImage executable with `chmod +x` and run it, or extract
+  the `.tar.gz` and run the `PaintingAssist` binary inside.
 
-To run from source instead, see [Running](#running) below (`uv run painting-assist`).
+To run from source instead, see [Running](#running) below.
 
 Building installers locally and the tagged-release flow are documented in
 [`packaging/README.md`](packaging/README.md).
 
 ## Requirements
 
-- [`uv`](https://docs.astral.sh/uv/) for environment management
-- Python is pinned to **3.12** via `.python-version`. Dependencies install via
-  `uv sync`: PySide6 (pinned to **6.8.1.1**), numpy, opencv-python, Pillow
+- [`uv`](https://docs.astral.sh/uv/) for environment management.
+- Python pinned to 3.12 via `.python-version`. Dependencies install with
+  `uv sync` and cover PySide6 (pinned to 6.8.1.1), numpy, opencv-python and
+  Pillow.
 
-> **macOS / Qt note — two pins that matter:**
-> - **Python 3.12** (`.python-version`). The uv-provided standalone **3.13**
->   build fails to load Qt's `cocoa` platform plugin with this PySide6, so the
->   GUI won't start. Don't delete `.python-version`, or uv will silently switch
->   to 3.13 and the window won't open.
-> - **PySide6 6.8.1.1**. 6.11.x fails to load its Qt platform plugins under the
->   bundled interpreters.
->
-> If the app ever won't launch (plugin/`cocoa` errors, or
-> `ModuleNotFoundError: painting_assist`), the venv has usually drifted — rebuild
-> it: `rm -rf .venv && uv sync`.
+Two macOS and Qt pins matter here.
+
+- Python 3.12, set in `.python-version`. The uv-provided standalone 3.13 build
+  fails to load Qt's `cocoa` platform plugin with this PySide6, so the GUI does
+  not start. Leaving `.python-version` in place stops uv silently switching to
+  3.13 and leaving you with a window that never opens.
+- PySide6 6.8.1.1. Version 6.11.x fails to load its Qt platform plugins under the
+  bundled interpreters.
+
+If the app ever refuses to launch, with `cocoa` plugin errors or a
+`ModuleNotFoundError: painting_assist`, the virtual environment has usually
+drifted. Rebuild it with `rm -rf .venv && uv sync`.
 
 ## Running
 
@@ -122,52 +128,50 @@ uv sync                 # create the venv and install everything
 uv run painting-assist  # launch the app
 ```
 
-Toolbar: **Open** (Ctrl+O), **Save** (Ctrl+S), **Export Blur Steps** (Ctrl+E) ·
-**Fit** (Ctrl+0), **1:1** (Ctrl+1) · **Eyedropper** (I) · **Reset**. The File
-menu adds **Open Recent** and the Help menu lists every shortcut (hold **B**
-for before/after, **V** for the Values toggle). Your window layout, control
-settings and last image are restored on the next launch.
+The toolbar carries Open (Ctrl+O), Save (Ctrl+S), Export Blur Steps (Ctrl+E),
+Fit (Ctrl+0), 1:1 (Ctrl+1), Eyedropper (I) and Reset. The File menu adds Open
+Recent and Settings, and the Help menu lists every shortcut, including hold B for
+before and after and V for the Values toggle. Your window layout, control
+settings and last image are all restored on the next launch.
 
-**Settings** (File ▸ Settings…) lets you pick the **theme** — match the system,
-or force light or dark — and how often the app **checks for updates** (every
-launch, 6-hourly, daily, weekly, or never). When a newer release is found the
-app offers to download the right installer for your platform and open it;
-Help ▸ **Check for Updates…** runs a check on demand.
+Settings lives under File and lets you pick the theme, either matching the
+system or forcing light or dark, and choose how often the app checks for updates,
+from every launch through to never. When a newer release is found the app offers
+to download the right installer for your platform and open it, and Check for
+Updates under Help runs the same check on demand.
 
-**Export Blur Steps** writes the whole coarse→fine progression in one click: set
-the Blur control to **Stepped** mode, press the button, choose a folder, and you
-get one PNG per stage (`blur_step_01_of_05_blur080.png` …), each with your crop
-applied (and the grid drawn in, if you say yes when asked) — heaviest blocking
+Export Blur Steps writes the whole coarse to fine progression in one go. Set the
+Blur control to Stepped mode, press the button, choose a folder, and you get one
+PNG per stage (`blur_step_01_of_05_blur080.png` and so on), each with your crop
+applied and the grid drawn in if you asked for it, from the heaviest blocking
 through to sharp.
 
-In the image view, scroll to zoom about the cursor and
-drag to pan; the view survives slider re-renders so it never jumps while you
-work. (Panning is paused while you are adjusting a crop region so the crop box
-gets the mouse.)
+In the image view, scroll to zoom about the cursor and drag to pan. The view
+survives slider re-renders, so it never jumps while you work. Panning pauses
+while you are adjusting a crop region, so the crop box keeps the mouse.
 
 ## Responsiveness
 
 Slider drags stay fluid because the render layer (`render_controller.py`)
 debounces input, runs the pipeline on a worker thread, renders a downscaled
-preview *while dragging* and a full-resolution pass on release, and drops stale
-frames so only the newest result is shown.
+preview while you drag and a full-resolution pass on release, and drops stale
+frames so only the newest result reaches the screen.
 
 ## Tests
 
 ```bash
 uv run pytest                           # headless suite (pipeline, cache, controls)
-uv run python tests/test_gui_smoke.py   # builds the window, drives the crop flow — PASS/FAIL
+uv run python tests/test_gui_smoke.py   # builds the window and drives the crop flow
 ```
 
 ## Adding a new control
 
-A new control is normally **one new file plus one import line** — no edits to
-the pipeline, the panel, the renderer, the view, or the main window. Each
-control declares its knobs as a list of `Param` descriptors and the dock builds
-the right widgets (slider / spin box / checkbox / combo box / text field)
-automatically.
+A new control is normally one new file plus one import line, with no edits to the
+pipeline, the panel, the renderer, the view or the main window. Each control
+declares its knobs as a list of `Param` descriptors and the dock builds the right
+widgets (slider, spin box, checkbox, combo box or text field) automatically.
 
-1. Create `painting_assist/controls/<your_control>.py`:
+1. Create `painting_assist/controls/<your_control>.py`.
 
    ```python
    from __future__ import annotations
@@ -184,7 +188,7 @@ automatically.
    class PosterizeControl(Control):
        id = "posterize"        # stable unique key (used in saved state)
        name = "Posterize"      # shown as the dock section title
-       order = 20              # pipeline + panel order; lower runs first
+       order = 20              # pipeline and panel order; lower runs first
 
        @classmethod
        def params(cls) -> List[Param]:
@@ -201,7 +205,7 @@ automatically.
    ```
 
 2. Register it for discovery by adding one line to
-   `painting_assist/controls/__init__.py`:
+   `painting_assist/controls/__init__.py`.
 
    ```python
    from . import posterize  # noqa: F401  -- registers PosterizeControl
@@ -209,11 +213,11 @@ automatically.
 
 ### Custom editors
 
-For controls that need richer UI than auto-generated sliders (like Blur's
-stepper or the interactive crop tool), override
+Some controls need richer UI than the auto-generated sliders, such as the Blur
+stepper or the interactive crop tool. For those, override
 `Control.create_editor(self, parent=None)` to return a widget that exposes a
-`paramChanged(str, object)` signal, an `interaction(bool)` signal, and a
-`refresh()` method. Return `None` (the default) to use the generic Param UI.
-The Blur and Crop controls are worked examples.
+`paramChanged(str, object)` signal, an `interaction(bool)` signal and a
+`refresh()` method. Return `None`, the default, to fall back to the generic Param
+UI. The Blur and Crop controls are worked examples.
 
-The generic `ParamType` set is `INT`, `FLOAT`, `BOOL`, `CHOICE`, `TEXT`.
+The generic `ParamType` set is `INT`, `FLOAT`, `BOOL`, `CHOICE` and `TEXT`.

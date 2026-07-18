@@ -1,7 +1,9 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Ensure the repo root is importable so `painting_assist` resolves under
 `uv run pytest` regardless of how the editable install exposes itself."""
+
+from __future__ import annotations
 
 import os
 import sys

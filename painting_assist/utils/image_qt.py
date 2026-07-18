@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """numpy <-> Qt conversion helpers.
 
@@ -10,6 +10,8 @@ own its own pixels.
 
 Array contract (everywhere in the app): RGB, ``uint8``, shape ``HxWx3``.
 """
+
+from __future__ import annotations
 
 import numpy as np
 from PySide6.QtGui import QImage, QPixmap
@@ -26,8 +28,7 @@ def ndarray_to_qimage(rgb: np.ndarray) -> QImage:
     rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
     if rgb.ndim != 3 or rgb.shape[2] != 3:
         raise ValueError(
-            "ndarray_to_qimage expects an RGB HxWx3 array, got shape "
-            f"{rgb.shape!r}"
+            f"ndarray_to_qimage expects an RGB HxWx3 array, got shape {rgb.shape!r}"
         )
     h, w = rgb.shape[:2]
     qimg = QImage(rgb.data, w, h, rgb.strides[0], QImage.Format_RGB888)

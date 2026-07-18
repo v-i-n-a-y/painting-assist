@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
@@ -56,14 +58,16 @@ def _eyedropper_cursor() -> QCursor:
 
     # Angled body: a slim parallelogram running from the tip (bottom-left) up to
     # the bulb (top-right), drawn along the pixmap diagonal.
-    body = QPolygonF([
-        QPointF(3.0, 21.0),   # tip
-        QPointF(5.5, 18.5),
-        QPointF(16.5, 7.5),
-        QPointF(19.0, 10.0),
-        QPointF(8.0, 21.0),
-        QPointF(5.5, 23.5),
-    ])
+    body = QPolygonF(
+        [
+            QPointF(3.0, 21.0),  # tip
+            QPointF(5.5, 18.5),
+            QPointF(16.5, 7.5),
+            QPointF(19.0, 10.0),
+            QPointF(8.0, 21.0),
+            QPointF(5.5, 23.5),
+        ]
+    )
     painter.drawPolygon(body)
 
     # Bulb at the top-right end of the body.
@@ -189,9 +193,7 @@ class ImageView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         # Smooth scaling for a pleasant reference view.
         self.setRenderHints(
-            self.renderHints()
-            | QPainter.SmoothPixmapTransform
-            | QPainter.Antialiasing
+            self.renderHints() | QPainter.SmoothPixmapTransform | QPainter.Antialiasing
         )
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)

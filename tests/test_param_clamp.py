@@ -1,6 +1,8 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Param.clamp coercion / range-clamping edge cases."""
+
+from __future__ import annotations
 
 import math
 
@@ -8,18 +10,35 @@ from painting_assist.controls.base import Param, ParamType
 
 
 def _int(minimum=0, maximum=10, default=3):
-    return Param(name="n", label="N", ptype=ParamType.INT,
-                 default=default, minimum=minimum, maximum=maximum)
+    return Param(
+        name="n",
+        label="N",
+        ptype=ParamType.INT,
+        default=default,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 def _float(minimum=0.0, maximum=1.0, default=0.5):
-    return Param(name="f", label="F", ptype=ParamType.FLOAT,
-                 default=default, minimum=minimum, maximum=maximum)
+    return Param(
+        name="f",
+        label="F",
+        ptype=ParamType.FLOAT,
+        default=default,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 def _choice():
-    return Param(name="c", label="C", ptype=ParamType.CHOICE, default="a",
-                 choices=[("a", "A"), ("b", "B")])
+    return Param(
+        name="c",
+        label="C",
+        ptype=ParamType.CHOICE,
+        default="a",
+        choices=[("a", "A"), ("b", "B")],
+    )
 
 
 def _text():

@@ -1,8 +1,10 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Snapshot decoupling: processing against a states snapshot must never read or
 mutate the live control, and live edits mid-render must not affect the snapshot
 result."""
+
+from __future__ import annotations
 
 from typing import List
 
@@ -20,8 +22,16 @@ class AddControl(Control):
         super().__init__()
 
     def params(self) -> List[Param]:
-        return [Param(name="amt", label="Amt", ptype=ParamType.INT,
-                      default=0, minimum=0, maximum=100)]
+        return [
+            Param(
+                name="amt",
+                label="Amt",
+                ptype=ParamType.INT,
+                default=0,
+                minimum=0,
+                maximum=100,
+            )
+        ]
 
     def is_active(self) -> bool:
         return self.enabled

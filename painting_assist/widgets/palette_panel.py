@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """The palette side panel — a strip of flat swatches from the quantize centroids.
 
@@ -8,12 +8,14 @@ Qt event loop. The widgets are thin: they lay out swatches and show the readout
 for whichever colour was last clicked or sampled.
 """
 
+from __future__ import annotations
+
 import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -47,8 +49,9 @@ def rgb_to_lab(rgb: Sequence[int]) -> Tuple[float, float, float]:
     """
     import cv2  # local import keeps this module importable without cv2 for pure use
 
-    px = np.array([[[int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF]]],
-                  dtype=np.uint8)
+    px = np.array(
+        [[[int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF]]], dtype=np.uint8
+    )
     lab = cv2.cvtColor(px, cv2.COLOR_RGB2Lab)[0, 0]
     return float(lab[0]), float(lab[1]), float(lab[2])
 

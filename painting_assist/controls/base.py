@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 import copy
@@ -25,16 +27,20 @@ class Param:
     control_panel.py builds a widget purely from this — no per-control UI code.
     """
 
-    name: str                                            # machine key into the values dict
-    label: str                                           # human label shown in the panel
+    name: str  # machine key into the values dict
+    label: str  # human label shown in the panel
     ptype: ParamType
     default: Any
-    minimum: Optional[float] = None                      # FLOAT/INT only; None -> panel falls back to 0
-    maximum: Optional[float] = None                      # FLOAT/INT only; None -> panel falls back to minimum + 100
-    step: Optional[float] = None                         # slider granularity; default 1 (INT) / 0.01 (FLOAT)
-    choices: Optional[Sequence[Tuple[Any, str]]] = None  # CHOICE only: (stored_value, shown_label) pairs
-    reversed: bool = False                               # UX: invert slider so LEFT=max, RIGHT=min
-    suffix: str = ""                                     # readout suffix, e.g. " px"
+    minimum: Optional[float] = None  # FLOAT/INT only; None -> panel falls back to 0
+    maximum: Optional[float] = (
+        None  # FLOAT/INT only; None -> panel falls back to minimum + 100
+    )
+    step: Optional[float] = None  # slider granularity; default 1 (INT) / 0.01 (FLOAT)
+    choices: Optional[Sequence[Tuple[Any, str]]] = (
+        None  # CHOICE only: (stored_value, shown_label) pairs
+    )
+    reversed: bool = False  # UX: invert slider so LEFT=max, RIGHT=min
+    suffix: str = ""  # readout suffix, e.g. " px"
     tooltip: str = ""
 
     def effective_step(self) -> float:
@@ -96,13 +102,13 @@ class Control:
     """
 
     # ---- class-level identity (subclass sets these) ----
-    id: str = ""                  # stable unique registry key, e.g. "blur" (used in saved state)
-    name: str = "Control"         # display name = panel section title, e.g. "Blur"
-    order: int = 100              # pipeline + panel ordering; lower runs first
+    id: str = ""  # stable unique registry key, e.g. "blur" (used in saved state)
+    name: str = "Control"  # display name = panel section title, e.g. "Blur"
+    order: int = 100  # pipeline + panel ordering; lower runs first
 
     def __init__(self) -> None:
         self._values: Dict[str, Any] = {p.name: p.default for p in self.params()}
-        self.enabled: bool = False        # painter opts a control in
+        self.enabled: bool = False  # painter opts a control in
         # Per-run scratch for optional side-channel outputs (e.g. a palette).
         # process() may write into it via emit_metadata(); the pipeline resets
         # and harvests it around each stage, so it never accumulates across runs.

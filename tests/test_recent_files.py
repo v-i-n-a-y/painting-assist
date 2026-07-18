@@ -1,10 +1,12 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Unit tests for the recent-files list helpers in main_window.
 
 These are pure functions (``update_recent`` is filesystem-free; ``prune_recent``
 only calls ``os.path.exists``) so they run headless without a QApplication.
 """
+
+from __future__ import annotations
 
 import os
 

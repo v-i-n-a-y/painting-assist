@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 """PyInstaller entry script.
 
 Kept separate from ``painting_assist/app.py`` so the frozen bundle has a stable

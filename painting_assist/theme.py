@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Application theming: system / light / dark.
 
@@ -13,6 +13,8 @@ Live OS-theme following: when the mode is "system" we subscribe to
 light and dark. Applying any fixed mode tears that subscription down again. The
 connection is held in a module-level slot so there is only ever one.
 """
+
+from __future__ import annotations
 
 from typing import Optional, Union
 
@@ -99,9 +101,15 @@ def light_palette() -> QPalette:
 
     # Disabled group (a very common miss).
     p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_text)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor("#c8c8c8"))
+    p.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text
+    )
+    p.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text
+    )
+    p.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor("#c8c8c8")
+    )
 
     return p
 
@@ -135,9 +143,15 @@ def dark_palette() -> QPalette:
 
     # Disabled group (a very common miss).
     p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_text)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor("#464646"))
+    p.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text
+    )
+    p.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text
+    )
+    p.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor("#464646")
+    )
 
     return p
 

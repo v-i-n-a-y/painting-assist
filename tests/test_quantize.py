@@ -1,7 +1,9 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """ColourGroupsControl determinism: identical image + colour count must quantize
 to byte-identical output (the RNG is seeded from the proxy's own content)."""
+
+from __future__ import annotations
 
 import numpy as np
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Update checking and installer download for Painting Assist.
 
@@ -28,6 +28,8 @@ relaunching) is deliberately **out of scope**. The deliverable is to download
 the correct installer and open it, so the user completes the install through the
 platform's normal installer flow.
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -106,11 +108,11 @@ def is_newer(remote: str, local: str) -> bool:
     are equal (neither newer), while ``"0.3.1"`` is newer than ``"0.3"``.
     """
     r = parse_version(remote)
-    l = parse_version(local)
-    n = max(len(r), len(l))
+    loc = parse_version(local)
+    n = max(len(r), len(loc))
     r += (0,) * (n - len(r))
-    l += (0,) * (n - len(l))
-    return r > l
+    loc += (0,) * (n - len(loc))
+    return r > loc
 
 
 def pick_asset(
@@ -390,9 +392,7 @@ class UpdateChecker(QObject):
     # ------------------------------------------------------------------ #
     # Internals (GUI thread via QueuedConnection)
     # ------------------------------------------------------------------ #
-    def _on_check_done(
-        self, version: object, asset: object, error: object
-    ) -> None:
+    def _on_check_done(self, version: object, asset: object, error: object) -> None:
         """Translate a finished check into the right public signal."""
         if error is not None:
             self.checkFailed.emit(str(error))

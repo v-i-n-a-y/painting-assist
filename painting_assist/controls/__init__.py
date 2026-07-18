@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Control package.
 
@@ -14,6 +14,8 @@ Adding a new control is a two-step change:
 
 No other file needs to change.
 """
+
+from __future__ import annotations
 
 from . import crop  # noqa: F401  -- registers CropControl
 from . import adjust  # noqa: F401  -- registers ToneControl

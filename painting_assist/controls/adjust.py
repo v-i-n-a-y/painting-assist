@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import List
@@ -51,8 +53,7 @@ class ToneControl(Control):
                 name="contrast",
                 label="Contrast",
                 tooltip=(
-                    "Steepen (right) or flatten (left) the tonal range about "
-                    "mid-grey."
+                    "Steepen (right) or flatten (left) the tonal range about mid-grey."
                 ),
                 **common,
             ),
@@ -86,9 +87,9 @@ class ToneControl(Control):
         keep the LUT monotonic non-decreasing.
         """
         if contrast >= 0.0:
-            factor = 1.0 + 2.0 * contrast          # 1 .. 3
+            factor = 1.0 + 2.0 * contrast  # 1 .. 3
         else:
-            factor = 1.0 + 0.9 * contrast          # 1 .. 0.1
+            factor = 1.0 + 0.9 * contrast  # 1 .. 0.1
         x = np.arange(256, dtype=np.float32)
         y = (x - 127.5) * factor + 127.5
         return np.clip(np.round(y), 0, 255).astype(np.uint8)
@@ -122,12 +123,12 @@ class ToneControl(Control):
             a = lab[:, :, 1]
             b = lab[:, :, 2]
             if saturation != 0.0:
-                scale = 1.0 + saturation           # -1 -> 0 (grey), +1 -> 2x
+                scale = 1.0 + saturation  # -1 -> 0 (grey), +1 -> 2x
                 a[:] = (a - 128.0) * scale + 128.0
                 b[:] = (b - 128.0) * scale + 128.0
             if temperature != 0.0:
-                b[:] = b + temperature * 25.0       # warm -> +b* (yellow)
-                a[:] = a + temperature * 8.0        # warm -> +a* (red)
+                b[:] = b + temperature * 25.0  # warm -> +b* (yellow)
+                a[:] = a + temperature * 8.0  # warm -> +a* (red)
             lab = np.clip(lab, 0, 255).astype(np.uint8)
             out = cv2.cvtColor(lab, cv2.COLOR_Lab2RGB)
 

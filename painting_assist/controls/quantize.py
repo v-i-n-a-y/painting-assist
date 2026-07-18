@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import List
@@ -103,8 +105,9 @@ class ColourGroupsControl(Control):
         if px > self.PROC_MAX_PX:
             scale = (self.PROC_MAX_PX / px) ** 0.5
             pw, ph = max(1, int(w * scale)), max(1, int(h * scale))
-            small = cv2.resize(np.ascontiguousarray(img), (pw, ph),
-                               interpolation=cv2.INTER_AREA)
+            small = cv2.resize(
+                np.ascontiguousarray(img), (pw, ph), interpolation=cv2.INTER_AREA
+            )
         else:
             small = np.ascontiguousarray(img)
         sh, sw = small.shape[:2]
@@ -136,7 +139,9 @@ class ColourGroupsControl(Control):
         # cv2.setRNGSeed is global, which is fine here: a single worker thread
         # owns all processing, so there is no concurrent kmeans to interleave.
         sample_bytes = samples.view(np.uint8)[::997]
-        seed = (int(sample_bytes.sum(dtype=np.uint64)) ^ (k_eff * 0x9E3779B1)) & 0x7FFFFFFF
+        seed = (
+            int(sample_bytes.sum(dtype=np.uint64)) ^ (k_eff * 0x9E3779B1)
+        ) & 0x7FFFFFFF
         cv2.setRNGSeed(seed)
         _compactness, labels, centers = cv2.kmeans(
             samples, k_eff, None, criteria, 1, cv2.KMEANS_PP_CENTERS
@@ -151,9 +156,7 @@ class ColourGroupsControl(Control):
         order = np.argsort(centers[:, 0], kind="stable")
         palette_lab = centers[order].reshape(-1, 1, 3)
         palette_rgb = cv2.cvtColor(palette_lab, cv2.COLOR_Lab2RGB).reshape(-1, 3)
-        self.emit_metadata(
-            "palette", [tuple(int(c) for c in px) for px in palette_rgb]
-        )
+        self.emit_metadata("palette", [tuple(int(c) for c in px) for px in palette_rgb])
 
         # Upscale the flat masses back to full size (nearest = exact for flats).
         if (sh, sw) != (h, w):

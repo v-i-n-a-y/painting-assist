@@ -1,7 +1,9 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """CropControl geometry: rect_norm clamping, process output shape, full-frame
 detection, and degenerate-rect safety."""
+
+from __future__ import annotations
 
 import numpy as np
 

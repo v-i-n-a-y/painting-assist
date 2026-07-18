@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
@@ -92,33 +94,57 @@ class GridControl(Control):
         """All generic widgets — no custom editor needed."""
         return [
             Param(
-                name="columns", label="Columns", ptype=ParamType.INT,
-                default=4, minimum=1, maximum=24, step=1,
+                name="columns",
+                label="Columns",
+                ptype=ParamType.INT,
+                default=4,
+                minimum=1,
+                maximum=24,
+                step=1,
                 tooltip="Vertical divisions (number of columns).",
             ),
             Param(
-                name="rows", label="Rows", ptype=ParamType.INT,
-                default=4, minimum=1, maximum=24, step=1,
+                name="rows",
+                label="Rows",
+                ptype=ParamType.INT,
+                default=4,
+                minimum=1,
+                maximum=24,
+                step=1,
                 tooltip="Horizontal divisions (number of rows).",
             ),
             Param(
-                name="color", label="Colour", ptype=ParamType.CHOICE,
+                name="color",
+                label="Colour",
+                ptype=ParamType.CHOICE,
                 default="red",
                 choices=[(key, key.capitalize()) for key in _COLORS],
                 tooltip="Line colour — pick one that contrasts with the image.",
             ),
             Param(
-                name="opacity", label="Opacity", ptype=ParamType.INT,
-                default=100, minimum=10, maximum=100, step=5, suffix=" %",
+                name="opacity",
+                label="Opacity",
+                ptype=ParamType.INT,
+                default=100,
+                minimum=10,
+                maximum=100,
+                step=5,
+                suffix=" %",
                 tooltip="Line opacity; lower it to see the image through the grid.",
             ),
             Param(
-                name="thickness", label="Line width", ptype=ParamType.INT,
-                default=2, minimum=1, maximum=8,
+                name="thickness",
+                label="Line width",
+                ptype=ParamType.INT,
+                default=2,
+                minimum=1,
+                maximum=8,
                 tooltip="Relative line width (scaled to the image size).",
             ),
             Param(
-                name="diagonals", label="Diagonals", ptype=ParamType.BOOL,
+                name="diagonals",
+                label="Diagonals",
+                ptype=ParamType.BOOL,
                 default=False,
                 tooltip="Draw corner-to-corner diagonals to find the centre.",
             ),

@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 name: Build installers
 
 # Build native installers for macOS (arm64 + x86_64), Windows and Linux.

@@ -1,7 +1,9 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """BlurControl: ladder parsing, effective_radius per mode, and the process()
 array contract (shape/dtype preserved, input not mutated)."""
+
+from __future__ import annotations
 
 import numpy as np
 

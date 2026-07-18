@@ -1,9 +1,11 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """GridControl is now a non-destructive viewer overlay: process() is the
 identity and is_active() is always False. The pixel-drawing routine lives in the
 module-level draw_grid(); overlay_spec() resolves the params (incl. the colour
 preset RGB) for the viewer."""
+
+from __future__ import annotations
 
 import numpy as np
 
@@ -76,8 +78,15 @@ def test_overlay_spec_visible_reflects_enabled_and_content():
 # ---- draw_grid free function ----
 def test_draw_grid_changes_pixels_and_preserves_shape_dtype():
     img = _img()
-    out = draw_grid(img, columns=5, rows=4, color_rgb=(255, 0, 0),
-                    opacity=1.0, thickness=2, diagonals=False)
+    out = draw_grid(
+        img,
+        columns=5,
+        rows=4,
+        color_rgb=(255, 0, 0),
+        opacity=1.0,
+        thickness=2,
+        diagonals=False,
+    )
     assert out.shape == img.shape
     assert out.dtype == img.dtype
     assert not np.array_equal(out, img)  # lines were drawn
@@ -86,17 +95,38 @@ def test_draw_grid_changes_pixels_and_preserves_shape_dtype():
 def test_draw_grid_does_not_mutate_input():
     img = _img()
     before = img.copy()
-    draw_grid(img, columns=6, rows=6, color_rgb=(0, 255, 0),
-              opacity=0.7, thickness=3, diagonals=True)
+    draw_grid(
+        img,
+        columns=6,
+        rows=6,
+        color_rgb=(0, 255, 0),
+        opacity=0.7,
+        thickness=3,
+        diagonals=True,
+    )
     assert np.array_equal(img, before)
 
 
 def test_draw_grid_diagonals_flag_draws_more():
     img = _img()
-    plain = draw_grid(img, columns=1, rows=1, color_rgb=(255, 255, 255),
-                      opacity=1.0, thickness=2, diagonals=False)
+    plain = draw_grid(
+        img,
+        columns=1,
+        rows=1,
+        color_rgb=(255, 255, 255),
+        opacity=1.0,
+        thickness=2,
+        diagonals=False,
+    )
     # With 1x1 and no diagonals, nothing is drawn.
     assert np.array_equal(plain, img)
-    diag = draw_grid(img, columns=1, rows=1, color_rgb=(255, 255, 255),
-                     opacity=1.0, thickness=2, diagonals=True)
+    diag = draw_grid(
+        img,
+        columns=1,
+        rows=1,
+        color_rgb=(255, 255, 255),
+        opacity=1.0,
+        thickness=2,
+        diagonals=True,
+    )
     assert not np.array_equal(diag, img)

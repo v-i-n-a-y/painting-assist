@@ -1,0 +1,20 @@
+# Copyright 2026 Vinay Williams
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+        pass_filenames: true
+
+  - repo: https://github.com/v-i-n-a-y/pre-commits
+    rev: v0.5.0
+    hooks:
+      - id: copyright-check
+        args: [--holder, "Vinay Williams"]
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-endings
+      - id: detect-secrets

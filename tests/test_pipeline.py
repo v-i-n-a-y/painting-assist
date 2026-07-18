@@ -1,10 +1,12 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Headless tests for the control pipeline + BlurControl basics.
 
 Runs without Qt: builds a ControlPipeline over a synthetic RGB image and
 checks the array contract (shape/dtype) plus active vs. passthrough behaviour.
 """
+
+from __future__ import annotations
 
 import numpy as np
 

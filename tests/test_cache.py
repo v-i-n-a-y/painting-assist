@@ -1,7 +1,9 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Prefix-cache behaviour of ControlPipeline, using spy controls that count
 their process() invocations."""
+
+from __future__ import annotations
 
 from typing import List
 
@@ -23,8 +25,16 @@ class SpyControl(Control):
         super().__init__()
 
     def params(self) -> List[Param]:  # instance method is fine for our use
-        return [Param(name="amt", label="Amt", ptype=ParamType.INT,
-                      default=0, minimum=0, maximum=100)]
+        return [
+            Param(
+                name="amt",
+                label="Amt",
+                ptype=ParamType.INT,
+                default=0,
+                minimum=0,
+                maximum=100,
+            )
+        ]
 
     def is_active(self) -> bool:
         return self.enabled

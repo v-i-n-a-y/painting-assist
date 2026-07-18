@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 """Programmatic app icon generator for Painting Assist.
 
 Draws a rounded-square canvas with a coarse-to-fine blurred colour-block
@@ -56,10 +58,10 @@ def build_base(size: int) -> Image.Image:
     bd = ImageDraw.Draw(blocks)
 
     palette = [
-        (232, 168, 74),   # warm ochre
-        (214, 96, 77),    # terracotta red
+        (232, 168, 74),  # warm ochre
+        (214, 96, 77),  # terracotta red
         (108, 142, 155),  # slate teal
-        (66, 88, 120),    # deep blue
+        (66, 88, 120),  # deep blue
         (196, 204, 168),  # sage
     ]
 
@@ -99,11 +101,13 @@ def build_base(size: int) -> Image.Image:
         t = x / (S - 1)
         # ease so blur ramps up toward the right third
         a = max(0.0, (t - 0.45) / 0.55)
-        ramp.putpixel((x, 0), int(255 * min(1.0, a ** 1.4)))
+        ramp.putpixel((x, 0), int(255 * min(1.0, a**1.4)))
     ramp = ramp.resize((S, S))
     blocks = Image.composite(blurred, blocks, ramp)
 
-    blocks.putalpha(Image.composite(blocks.getchannel("A"), Image.new("L", (S, S), 0), inner_mask))
+    blocks.putalpha(
+        Image.composite(blocks.getchannel("A"), Image.new("L", (S, S), 0), inner_mask)
+    )
     img.alpha_composite(blocks)
 
     # --- Grid hint: thin light lines over the study ---
@@ -115,13 +119,18 @@ def build_base(size: int) -> Image.Image:
         gy = box[1] + int(bh * f)
         gd.line((gx, box[1], gx, box[3]), fill=(255, 255, 255, 150), width=line_w)
         gd.line((box[0], gy, box[2], gy), fill=(255, 255, 255, 150), width=line_w)
-    grid.putalpha(Image.composite(grid.getchannel("A"), Image.new("L", (S, S), 0), inner_mask))
+    grid.putalpha(
+        Image.composite(grid.getchannel("A"), Image.new("L", (S, S), 0), inner_mask)
+    )
     img.alpha_composite(grid)
 
     # --- Inner canvas border for a framed look ---
     frame = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     ImageDraw.Draw(frame).rounded_rectangle(
-        box, radius=inner_radius, outline=(255, 255, 255, 210), width=max(1, int(S * 0.012))
+        box,
+        radius=inner_radius,
+        outline=(255, 255, 255, 210),
+        width=max(1, int(S * 0.012)),
     )
     img.alpha_composite(frame)
 
@@ -132,7 +141,9 @@ def build_base(size: int) -> Image.Image:
     # Subtle top highlight for depth.
     hi = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     hd = ImageDraw.Draw(hi)
-    hd.rounded_rectangle((0, 0, S - 1, int(S * 0.5)), radius=radius, fill=(255, 255, 255, 26))
+    hd.rounded_rectangle(
+        (0, 0, S - 1, int(S * 0.5)), radius=radius, fill=(255, 255, 255, 26)
+    )
     hi.putalpha(Image.composite(hi.getchannel("A"), Image.new("L", (S, S), 0), outer))
     img.alpha_composite(hi)
 
@@ -151,8 +162,16 @@ def main() -> None:
     iconset = os.path.join(HERE, "icon.iconset")
     os.makedirs(iconset, exist_ok=True)
     specs = [
-        (16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
-        (256, 1), (256, 2), (512, 1), (512, 2),
+        (16, 1),
+        (16, 2),
+        (32, 1),
+        (32, 2),
+        (128, 1),
+        (128, 2),
+        (256, 1),
+        (256, 2),
+        (512, 1),
+        (512, 2),
     ]
     for base, scale in specs:
         px = base * scale

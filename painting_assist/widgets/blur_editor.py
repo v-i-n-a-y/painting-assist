@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Custom editor widget for :class:`BlurControl` ("Squint").
 
@@ -7,6 +7,8 @@ and a stepped ladder of discrete blur levels — and reports every user change
 back to the panel via the ``paramChanged`` signal. The widget only reads from
 the control; it never mutates it.
 """
+
+from __future__ import annotations
 
 from typing import Callable, List
 
@@ -267,9 +269,7 @@ class BlurEditor(QWidget):
     def _update_levels_label(self) -> None:
         """Refresh the read-only ladder label from the control."""
         levels = self._control.stage_levels()
-        self._levels_label.setText(
-            "Levels: " + " · ".join(str(int(v)) for v in levels)
-        )
+        self._levels_label.setText("Levels: " + " · ".join(str(int(v)) for v in levels))
 
     # ====================================================================== #
     # Stage count
@@ -368,9 +368,7 @@ class BlurEditor(QWidget):
         stage = max(1, min(count, int(stage)))
         levels = self._control.stage_levels()
         radius = int(levels[stage - 1]) if 1 <= stage <= len(levels) else 0
-        self._stage_label.setText(
-            "Stage %d / %d  —  %d px" % (stage, count, radius)
-        )
+        self._stage_label.setText("Stage %d / %d  —  %d px" % (stage, count, radius))
 
     # ====================================================================== #
     # Refresh
@@ -381,6 +379,7 @@ class BlurEditor(QWidget):
         Does not emit :attr:`paramChanged` (guarded by ``self._suppress``) and
         rebuilds the manual-stage spinboxes for the current stage count.
         """
+
         def apply() -> None:
             # Mode.
             mode = str(self._control.get("mode"))

@@ -1,9 +1,11 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """ValuesControl: greyscale is neutral, value-steps posterize the lightness
 channel, keep_colour preserves hue, and isolate dims out-of-band pixels. All
 work is headless (no GUI) and in CIELab, so tolerances allow for the RGB<->Lab
 uint8 roundtrip."""
+
+from __future__ import annotations
 
 import cv2
 import numpy as np

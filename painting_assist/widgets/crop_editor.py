@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Custom editor widget for :class:`CropControl` (the "Canvas & Crop" tool).
 
@@ -10,10 +10,11 @@ flag is raised while programmatically loading values into the widgets, and every
 user-callback bails out early while it is set.
 """
 
-import math
-from typing import Optional
+from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import math
+
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,

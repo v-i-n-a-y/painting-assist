@@ -1,3 +1,5 @@
+# Copyright 2026 Vinay Williams
+
 """Headless tests for the quantize palette metadata channel and PalettePanel maths."""
 
 from __future__ import annotations

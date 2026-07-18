@@ -1,7 +1,9 @@
+# Copyright 2026 Vinay Williams
+
 [project]
 name = "painting-assist"
 version = "0.4.1"
-description = "Squint — a coarse-to-fine painting reference tool"
+description = "Painting Assist, a coarse to fine painting reference tool"
 requires-python = ">=3.9"
 dependencies = [
     # PySide6 pinned to 6.8.1.1: 6.11.x fails to load its Qt platform plugins
@@ -16,7 +18,7 @@ dependencies = [
 painting-assist = "painting_assist.app:main"
 
 [dependency-groups]
-dev = ["pytest", "pyinstaller"]
+dev = ["pytest", "pyinstaller", "pre-commit"]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,4 +1,4 @@
-from __future__ import annotations
+# Copyright 2026 Vinay Williams
 
 """Application settings dialog (theme + automatic update checking).
 
@@ -7,6 +7,8 @@ persistence (QSettings) and applying the choices live in ``MainWindow``, so
 this widget stays a dumb, testable form. Interval choices are expressed in
 hours (0 = never check automatically).
 """
+
+from __future__ import annotations
 
 from typing import Dict, Optional
 
@@ -87,9 +89,7 @@ class SettingsDialog(QDialog):
         self._interval_combo.setCurrentIndex(nearest_interval_index(update_hours))
         form.addRow("Check for updates", self._interval_combo)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
