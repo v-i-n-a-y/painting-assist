@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
+from painting_assist import __author__, __version__
 from painting_assist.controls import registry
 from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
@@ -288,6 +289,12 @@ class MainWindow(QMainWindow):
         shortcuts_action.triggered.connect(self._on_shortcuts)
         help_menu.addAction(shortcuts_action)
 
+        about_action = QAction("About Painting Assist", self)
+        # On macOS Qt relocates this into the application menu automatically.
+        about_action.setMenuRole(QAction.AboutRole)
+        about_action.triggered.connect(self._on_about)
+        help_menu.addAction(about_action)
+
     # ------------------------------------------------------------------ #
     # Recent files (File ▸ Open Recent)
     # ------------------------------------------------------------------ #
@@ -346,6 +353,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Help
     # ------------------------------------------------------------------ #
+    def _on_about(self) -> None:
+        """Show the About dialog: program name, version and author."""
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            f"<b>{APP_NAME}</b><br>"
+            f"Version {__version__}<br><br>"
+            f"Author: {__author__}",
+        )
+
     def _on_shortcuts(self) -> None:
         """Show a simple dialog listing the keyboard shortcuts."""
         QMessageBox.information(
