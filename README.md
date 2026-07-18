@@ -128,6 +128,12 @@ menu adds **Open Recent** and the Help menu lists every shortcut (hold **B**
 for before/after, **V** for the Values toggle). Your window layout, control
 settings and last image are restored on the next launch.
 
+**Settings** (File ▸ Settings…) lets you pick the **theme** — match the system,
+or force light or dark — and how often the app **checks for updates** (every
+launch, 6-hourly, daily, weekly, or never). When a newer release is found the
+app offers to download the right installer for your platform and open it;
+Help ▸ **Check for Updates…** runs a check on demand.
+
 **Export Blur Steps** writes the whole coarse→fine progression in one click: set
 the Blur control to **Stepped** mode, press the button, choose a folder, and you
 get one PNG per stage (`blur_step_01_of_05_blur080.png` …), each with your crop

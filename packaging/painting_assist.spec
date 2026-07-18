@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 RESOURCES = PROJECT_ROOT / "painting_assist" / "resources"
 
-APP_VERSION = "0.3.0"  # keep in sync with pyproject.toml / __init__.py
+APP_VERSION = "0.4.0"  # keep in sync with pyproject.toml / __init__.py
 
 # Display name for the bundle; binary name differs on win/linux (no spaces).
 APP_DISPLAY_NAME = "Painting Assist"

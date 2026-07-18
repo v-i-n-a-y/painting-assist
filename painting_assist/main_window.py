@@ -14,10 +14,13 @@ import json
 import os
 from typing import Optional
 
+import time
+
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QTimer
 from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -27,7 +30,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
-from painting_assist import __author__, __version__
+from painting_assist import __author__, __version__, theme, updater
 from painting_assist.controls import registry
 from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
@@ -36,6 +39,11 @@ from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
 from painting_assist.widgets.image_view import ImageView
 from painting_assist.widgets.palette_panel import PalettePanel, format_readout
+from painting_assist.widgets.settings_dialog import (
+    DEFAULT_THEME,
+    DEFAULT_UPDATE_HOURS,
+    SettingsDialog,
+)
 
 APP_NAME = "Painting Assist"
 
@@ -160,6 +168,30 @@ class MainWindow(QMainWindow):
         # Recent-files list (most-recent-first), persisted in QSettings.
         self._recent: list = []
 
+        # ---- settings (theme + automatic update checks) ----
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        self._theme_mode = str(settings.value("settings/theme", DEFAULT_THEME))
+        if self._theme_mode not in theme.THEME_MODES:
+            self._theme_mode = DEFAULT_THEME
+        try:
+            self._update_hours = float(
+                settings.value("settings/update_hours", DEFAULT_UPDATE_HOURS)
+            )
+        except (TypeError, ValueError):
+            self._update_hours = DEFAULT_UPDATE_HOURS
+
+        # ---- update checker (off-thread; signals land on the GUI thread) ----
+        self._updater = updater.UpdateChecker(__version__, self)
+        self._updater.updateAvailable.connect(self._on_update_available)
+        self._updater.upToDate.connect(self._on_up_to_date)
+        self._updater.checkFailed.connect(self._on_update_check_failed)
+        self._updater.downloadProgress.connect(self._on_download_progress)
+        self._updater.downloadReady.connect(self._on_download_ready)
+        # Automatic checks stay silent on failure/up-to-date; manual ones report.
+        self._manual_update_check = False
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._auto_check_updates)
+
         self._build_toolbar()
         self._build_menus()
         self._update_export_enabled()
@@ -182,6 +214,7 @@ class MainWindow(QMainWindow):
         # ---- restore persisted window + control session (built UI first) ----
         self._restore_session()
         self._update_grid_overlay()
+        self._apply_update_schedule()
 
     # ------------------------------------------------------------------ #
     # Toolbar / menu
@@ -269,6 +302,14 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._export_action)
         file_menu.addSeparator()
 
+        settings_action = QAction("Settings…", self)
+        # macOS relocates this into the application menu as Preferences.
+        settings_action.setMenuRole(QAction.PreferencesRole)
+        settings_action.setShortcut(QKeySequence.Preferences)
+        settings_action.triggered.connect(self._on_settings)
+        file_menu.addAction(settings_action)
+        file_menu.addSeparator()
+
         quit_action = QAction("Quit", self)
         quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         quit_action.setStatusTip("Quit Painting Assist")
@@ -288,6 +329,10 @@ class MainWindow(QMainWindow):
         shortcuts_action = QAction("Keyboard Shortcuts", self)
         shortcuts_action.triggered.connect(self._on_shortcuts)
         help_menu.addAction(shortcuts_action)
+
+        check_updates_action = QAction("Check for Updates…", self)
+        check_updates_action.triggered.connect(self._on_check_updates)
+        help_menu.addAction(check_updates_action)
 
         about_action = QAction("About Painting Assist", self)
         # On macOS Qt relocates this into the application menu automatically.
@@ -415,6 +460,134 @@ class MainWindow(QMainWindow):
         self._pipeline.set_enabled("values", not control.enabled)
         self._panel.refresh_all()
         self._request_render(interactive=False)
+
+    # ------------------------------------------------------------------ #
+    # Settings (theme + automatic update checks)
+    # ------------------------------------------------------------------ #
+    def _on_settings(self) -> None:
+        """Open the settings dialog; apply and persist any accepted changes."""
+        dialog = SettingsDialog(self._theme_mode, self._update_hours, self)
+        if not dialog.exec():
+            return
+        values = dialog.values()
+        self._theme_mode = str(values["theme"])
+        self._update_hours = float(values["update_hours"])
+
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("settings/theme", self._theme_mode)
+        settings.setValue("settings/update_hours", self._update_hours)
+
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply_theme(app, self._theme_mode)
+        self._apply_update_schedule(startup=False)
+
+    # ------------------------------------------------------------------ #
+    # Update checking
+    # ------------------------------------------------------------------ #
+    def _apply_update_schedule(self, startup: bool = True) -> None:
+        """Start/stop the automatic update timer per the configured interval.
+
+        Interval semantics: 0 hours = never check automatically; a tiny value
+        (the "Every launch" option) = check once at startup with no recurring
+        timer; anything larger = a recurring timer at that interval, plus a
+        startup check when the last recorded check is older than the interval.
+        """
+        self._update_timer.stop()
+        hours = self._update_hours
+        if hours <= 0.0:
+            return
+        if hours < 1.0:  # "Every launch"
+            if startup:
+                self._auto_check_updates()
+            return
+        self._update_timer.start(int(hours * 3600 * 1000))
+        if startup:
+            settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+            try:
+                last = float(settings.value("settings/last_update_check", 0.0))
+            except (TypeError, ValueError):
+                last = 0.0
+            if time.time() - last >= hours * 3600:
+                self._auto_check_updates()
+
+    def _auto_check_updates(self) -> None:
+        """Timer/startup slot: silent check (only an available update surfaces)."""
+        self._manual_update_check = False
+        self._record_update_check()
+        self._updater.check()
+
+    def _on_check_updates(self) -> None:
+        """Help menu slot: explicit check, so every outcome gets a dialog/message."""
+        self._manual_update_check = True
+        self._record_update_check()
+        self.statusBar().showMessage("Checking for updates…", 4000)
+        self._updater.check()
+
+    @staticmethod
+    def _record_update_check() -> None:
+        """Stamp now as the last automatic-check time (throttles startup checks)."""
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("settings/last_update_check", time.time())
+
+    def _on_update_available(self, version: str, asset: dict) -> None:
+        """A newer release exists: offer to download and open its installer."""
+        if not updater.running_frozen():
+            # Source checkout: installing over it makes no sense; just say so.
+            QMessageBox.information(
+                self,
+                "Update available",
+                "Version {} is available (you are on {}).\n"
+                "You are running from source — update with git pull, or grab "
+                "an installer from the releases page.".format(version, __version__),
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Update available",
+            "Version {} is available (you are on {}).\n"
+            "Download and open the installer now?".format(version, __version__),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._updater.downloadAndOpen(asset)
+
+    def _on_up_to_date(self, version: str) -> None:
+        """No newer release; only worth saying when the user asked explicitly."""
+        if self._manual_update_check:
+            QMessageBox.information(
+                self, "Up to date",
+                "You are on the latest version ({}).".format(version),
+            )
+
+    def _on_update_check_failed(self, message: str) -> None:
+        """Check/download failed: loud for manual checks, silent otherwise."""
+        if self._manual_update_check:
+            QMessageBox.warning(self, "Update check failed", message)
+        self._busy_label.clear()
+
+    def _on_download_progress(self, percent: int) -> None:
+        """Show installer download progress in the permanent status label."""
+        self._busy_label.setText("Downloading update… {}%".format(percent))
+
+    def _on_download_ready(self, path: str) -> None:
+        """The installer downloaded: hand it to the OS and tell the user."""
+        self._busy_label.clear()
+        try:
+            updater.open_installer(path)
+        except Exception as exc:  # pragma: no cover - OS/handler error path
+            QMessageBox.warning(
+                self, "Could not open installer",
+                "Downloaded to {} but could not open it:\n{}".format(path, exc),
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Installer ready",
+            "The installer has been opened. Quit Painting Assist and follow "
+            "it to finish updating.",
+        )
 
     # ------------------------------------------------------------------ #
     # Grid overlay glue

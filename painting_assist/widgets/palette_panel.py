@@ -95,13 +95,17 @@ class _Swatch(QFrame):
 
     def __init__(self, rgb: RGB, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._rgb: RGB = rgb
         self.setFixedHeight(SWATCH_HEIGHT)
         self.setMinimumWidth(SWATCH_MIN_WIDTH)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip(rgb_to_hex(rgb))
         self.setFrameShape(QFrame.NoFrame)
+        self.set_rgb(rgb)
+
+    def set_rgb(self, rgb: RGB) -> None:
+        """Recolour the swatch (used by the reusable sampled-colour chip)."""
+        self._rgb: RGB = rgb
+        self.setToolTip(rgb_to_hex(rgb))
         r, g, b = rgb
         self.setStyleSheet("background-color: rgb({}, {}, {});".format(r, g, b))
 
@@ -135,6 +139,31 @@ class PalettePanel(QWidget):
         self._strip.setSpacing(2)
         outer.addLayout(self._strip)
 
+        # Dedicated "sampled colour" slot, kept clearly apart from the palette
+        # strip above so a lone sample is not mistaken for a palette entry. A
+        # thin divider separates the two; the row hides itself when empty.
+        self._sample_divider = QFrame()
+        self._sample_divider.setFrameShape(QFrame.HLine)
+        self._sample_divider.setFrameShadow(QFrame.Sunken)
+        outer.addWidget(self._sample_divider)
+
+        self._sample_row = QWidget()
+        sample_layout = QHBoxLayout(self._sample_row)
+        sample_layout.setContentsMargins(0, 0, 0, 0)
+        sample_layout.setSpacing(8)
+        sample_caption = QLabel("Sampled")
+        sample_caption.setEnabled(False)
+        sample_layout.addWidget(sample_caption)
+        self._sample_swatch = _Swatch((0, 0, 0))
+        self._sample_swatch.setFixedWidth(SWATCH_HEIGHT)
+        self._sample_swatch.clicked.connect(self._on_swatch_clicked)
+        sample_layout.addWidget(self._sample_swatch)
+        sample_layout.addStretch(1)
+        outer.addWidget(self._sample_row)
+
+        self._sample_divider.setVisible(False)
+        self._sample_row.setVisible(False)
+
         self._readout = QLabel("")
         self._readout.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._readout.setWordWrap(True)
@@ -163,16 +192,22 @@ class PalettePanel(QWidget):
             self._swatches.append(swatch)
 
     def set_sample(self, rgb: Optional[Sequence[int]]) -> None:
-        """Show the readout for an arbitrary sampled colour (or clear it if None)."""
+        """Show the swatch + readout for a sampled colour (or hide it if None)."""
         if rgb is None:
             self._readout.setText("")
+            self._sample_divider.setVisible(False)
+            self._sample_row.setVisible(False)
             return
-        self._readout.setText(format_readout(rgb))
+        triple: RGB = (int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF)
+        self._sample_swatch.set_rgb(triple)
+        self._sample_divider.setVisible(True)
+        self._sample_row.setVisible(True)
+        self._readout.setText(format_readout(triple))
 
     def clear(self) -> None:
-        """Remove all swatches and the readout."""
+        """Remove all swatches, the sample slot and the readout."""
         self._clear_swatches()
-        self._readout.setText("")
+        self.set_sample(None)
         self._placeholder.setVisible(True)
 
     # ------------------------------------------------------------------

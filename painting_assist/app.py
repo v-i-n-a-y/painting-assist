@@ -13,8 +13,12 @@ import sys
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
+from PySide6.QtCore import QSettings
+
 from painting_assist import controls  # noqa: F401  -- runs @register decorators
-from painting_assist.main_window import MainWindow
+from painting_assist import theme
+from painting_assist.main_window import _SETTINGS_APP, _SETTINGS_ORG, MainWindow
+from painting_assist.widgets.settings_dialog import DEFAULT_THEME
 
 
 def _app_icon() -> QIcon:
@@ -34,6 +38,15 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Painting Assist")
     app.setApplicationDisplayName("Painting Assist")
+
+    # Apply the persisted theme (system/light/dark) before any window shows,
+    # so the first paint is already in the right look.
+    settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+    mode = str(settings.value("settings/theme", DEFAULT_THEME))
+    if mode not in theme.THEME_MODES:
+        mode = DEFAULT_THEME
+    theme.apply_theme(app, mode)
+
     icon = _app_icon()
     app.setWindowIcon(icon)
     win = MainWindow()

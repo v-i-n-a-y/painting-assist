@@ -4,7 +4,16 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPixmapItem,
@@ -15,6 +24,57 @@ from PySide6.QtWidgets import (
 
 from painting_assist.utils.image_qt import ndarray_to_qpixmap
 from painting_assist.widgets.crop_item import CropItem
+
+_EYEDROPPER_CURSOR: Optional[QCursor] = None
+
+
+def _eyedropper_cursor() -> QCursor:
+    """Return a cached eyedropper-shaped cursor (built once, lazily).
+
+    Draws a classic dropper — an angled body ending in a bulb at the top-right
+    and a fine tip at the bottom-left — as a 24x24 transparent pixmap, white
+    filled with a black outline so it reads against any image. The hotspot is
+    the dropper tip (bottom-left), where the sample is taken.
+    """
+    global _EYEDROPPER_CURSOR
+    if _EYEDROPPER_CURSOR is not None:
+        return _EYEDROPPER_CURSOR
+
+    size = 24
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+
+    outline = QPen(QColor(0, 0, 0))
+    outline.setWidthF(1.2)
+    outline.setJoinStyle(Qt.RoundJoin)
+    outline.setCapStyle(Qt.RoundCap)
+    painter.setPen(outline)
+    painter.setBrush(QColor(255, 255, 255))
+
+    # Angled body: a slim parallelogram running from the tip (bottom-left) up to
+    # the bulb (top-right), drawn along the pixmap diagonal.
+    body = QPolygonF([
+        QPointF(3.0, 21.0),   # tip
+        QPointF(5.5, 18.5),
+        QPointF(16.5, 7.5),
+        QPointF(19.0, 10.0),
+        QPointF(8.0, 21.0),
+        QPointF(5.5, 23.5),
+    ])
+    painter.drawPolygon(body)
+
+    # Bulb at the top-right end of the body.
+    bulb = QPainterPath()
+    bulb.addEllipse(QPointF(18.0, 6.0), 4.0, 4.0)
+    painter.drawPath(bulb)
+
+    painter.end()
+
+    _EYEDROPPER_CURSOR = QCursor(pixmap, 3, 21)  # hotspot at the tip
+    return _EYEDROPPER_CURSOR
 
 
 class GridOverlayItem(QGraphicsItem):
@@ -253,7 +313,7 @@ class ImageView(QGraphicsView):
     # Eyedropper
     # ------------------------------------------------------------------ #
     def set_eyedropper(self, active: bool) -> None:
-        """Toggle eyedropper mode: crosshair cursor, click samples a colour.
+        """Toggle eyedropper mode: dropper cursor, click samples a colour.
 
         While active, panning is disabled so a press samples instead of dragging
         the view (the wheel still zooms). Ignored while the crop overlay is
@@ -264,7 +324,7 @@ class ImageView(QGraphicsView):
         self._eyedropper = active
         if active:
             self.setDragMode(QGraphicsView.NoDrag)
-            self.viewport().setCursor(Qt.CrossCursor)
+            self.viewport().setCursor(_eyedropper_cursor())
         else:
             self.setDragMode(QGraphicsView.ScrollHandDrag)
             self.viewport().unsetCursor()
