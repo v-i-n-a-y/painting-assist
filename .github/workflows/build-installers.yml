@@ -47,8 +47,16 @@ jobs:
           cp -R "$APP" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
           DMG="dist/PaintingAssist-0.2.0-macos-${{ matrix.arch }}.dmg"
-          hdiutil create -volname "Painting Assist" -srcfolder "$STAGE" \
-            -ov -format UDZO "$DMG"
+          # hdiutil sporadically fails with "Resource busy" on GitHub runners;
+          # retry a few times before giving up.
+          for attempt in 1 2 3; do
+            if hdiutil create -volname "Painting Assist" -srcfolder "$STAGE" \
+              -ov -format UDZO "$DMG"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 5
+          done
           rm -rf "$STAGE"
 
       - name: Upload artifact
