@@ -43,7 +43,7 @@ class ControlPipeline:
         self._controls: List[Control] = controls if controls is not None else create_all()
         self._by_id: Dict[str, Control] = {c.id: c for c in self._controls}
         self._cache: List[Optional[_CacheEntry]] = [None] * len(self._controls)
-        self._base_id: Optional[int] = None
+        self._base_token: Optional[Any] = None
 
     # ---- introspection (GUI thread; for the panel) ----
     def controls(self) -> List[Control]:
@@ -68,7 +68,7 @@ class ControlPipeline:
         for control in self._controls:
             control.reset()
         self._cache = [None] * len(self._controls)
-        self._base_id = None
+        self._base_token = None
 
     # ---- snapshot for the worker ----
     def snapshot_states(self) -> Dict[str, ControlState]:
@@ -83,17 +83,28 @@ class ControlPipeline:
         self,
         source: np.ndarray,
         states: Optional[Dict[str, ControlState]] = None,
+        token: Optional[Any] = None,
     ) -> np.ndarray:
         """Apply active controls in order over `source`, reusing cached prefixes.
 
         If states is given, each control's values/enabled are taken from the snapshot
         (so the worker is decoupled from concurrent GUI edits); else uses live control
         state. Always derives from `source` (non-destructive). Returns RGB uint8.
+
+        `token` identifies the base image (source array + scale combo). The whole
+        cache is invalidated when it changes. Callers that render the *same* logical
+        source at the same scale should pass a stable token so the prefix cache is
+        reused even when a fresh (e.g. downscaled) array is passed each frame. When
+        omitted it falls back to ``id(source)``; this is only safe for one-shot
+        callers (Save/Export on an isolated pipeline) because a freed array's id can
+        be reused by a later, different array.
         """
+        if token is None:
+            token = id(source)
         # If the base image changed, the whole cache is stale.
-        if self._base_id != id(source):
+        if self._base_token != token:
             self._cache = [None] * len(self._controls)
-            self._base_id = id(source)
+            self._base_token = token
 
         current = source
         chain_key: Tuple[Any, ...] = ()
@@ -145,21 +156,14 @@ class ControlPipeline:
         return True, self._values_key(control.values())
 
     def _active_for_state(self, control: Control, state: ControlState) -> bool:
-        """Evaluate is_active() against a snapshot by temporarily applying it.
+        """Evaluate is_active() against a snapshot without touching live state.
 
-        Restores the control's live state afterward so introspection is side-effect free.
+        Uses ``is_active_snapshot`` so the worker thread never reads or mutates the
+        live control (which the GUI thread may be editing concurrently).
         """
         if not state.enabled:
             return False
-        saved_enabled = control.enabled
-        saved_values = control.values()
-        try:
-            control.enabled = state.enabled
-            control._values = dict(state.values)
-            return control.is_active()
-        finally:
-            control.enabled = saved_enabled
-            control._values = saved_values
+        return control.is_active_snapshot(state.enabled, state.values)
 
     @staticmethod
     def _values_key(values: Dict[str, Any]) -> Tuple[Any, ...]:
@@ -180,21 +184,14 @@ class ControlPipeline:
     ) -> np.ndarray:
         """Run control.process(current) under the given snapshot (or live state).
 
-        Applies the snapshot to the control for the duration of the call, then restores.
+        With a snapshot, ``process_snapshot`` runs against a throwaway copy so the
+        live control is never mutated on the worker thread.
         """
         if states is None:
             return control.process(current)
 
         state = states[control.id]
-        saved_enabled = control.enabled
-        saved_values = control.values()
-        try:
-            control.enabled = state.enabled
-            control._values = dict(state.values)
-            return control.process(current)
-        finally:
-            control.enabled = saved_enabled
-            control._values = saved_values
+        return control.process_snapshot(current, state.enabled, state.values)
 
     def _invalidate_from(self, i: int) -> None:
         """Null cache slots i..end (downstream stages stale)."""

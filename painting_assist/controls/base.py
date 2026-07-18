@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -28,8 +29,8 @@ class Param:
     label: str                                           # human label shown in the panel
     ptype: ParamType
     default: Any
-    minimum: Optional[float] = None                      # FLOAT/INT only
-    maximum: Optional[float] = None                      # FLOAT/INT only
+    minimum: Optional[float] = None                      # FLOAT/INT only; None -> panel falls back to 0
+    maximum: Optional[float] = None                      # FLOAT/INT only; None -> panel falls back to minimum + 100
     step: Optional[float] = None                         # slider granularity; default 1 (INT) / 0.01 (FLOAT)
     choices: Optional[Sequence[Tuple[Any, str]]] = None  # CHOICE only: (stored_value, shown_label) pairs
     reversed: bool = False                               # UX: invert slider so LEFT=max, RIGHT=min
@@ -76,6 +77,8 @@ class Param:
                 coerced = float(value)
             except (TypeError, ValueError):
                 return self.default
+            if coerced != coerced:  # NaN: min/max comparisons are all False,
+                return self.default  # which would silently pin to the bound.
             if self.minimum is not None:
                 coerced = max(float(self.minimum), coerced)
             if self.maximum is not None:
@@ -179,6 +182,33 @@ class Control:
         (e.g. blur radius 0 -> False) so the pipeline skips it cheaply.
         """
         return self.enabled
+
+    # ---- thread-safe snapshot evaluation (WORKER thread) ----
+    def _snapshot_clone(self, enabled: bool, values: Dict[str, Any]) -> "Control":
+        """Return a throwaway copy bound to a snapshot's (enabled, values).
+
+        The worker thread evaluates a control against a *snapshot* of its state
+        (taken on the GUI thread) so it never reads or mutates the live control
+        while the GUI may be editing it concurrently. A shallow copy shares the
+        class-level behaviour (params/process/is_active) but owns a fresh values
+        dict and enabled flag, so the concrete subclass's ``self.get(...)`` /
+        ``self.enabled`` reads resolve against the snapshot with no plumbing
+        changes in any subclass.
+        """
+        clone = copy.copy(self)
+        clone._values = dict(values)
+        clone.enabled = bool(enabled)
+        return clone
+
+    def process_snapshot(
+        self, img: np.ndarray, enabled: bool, values: Dict[str, Any]
+    ) -> np.ndarray:
+        """Run :meth:`process` against a (enabled, values) snapshot, side-effect free."""
+        return self._snapshot_clone(enabled, values).process(img)
+
+    def is_active_snapshot(self, enabled: bool, values: Dict[str, Any]) -> bool:
+        """Evaluate :meth:`is_active` against a snapshot, side-effect free."""
+        return self._snapshot_clone(enabled, values).is_active()
 
     # ---- generic persistence (works for any param dict) ----
     def to_state(self) -> Dict[str, Any]:

@@ -19,6 +19,8 @@ mechanisms, implemented exactly one way:
    is in flight at a time, so the pipeline cache needs no locking.
 """
 
+import logging
+
 from typing import Callable, Optional
 
 import numpy as np
@@ -38,16 +40,20 @@ except Exception:  # pragma: no cover - cv2 is a hard dependency in practice
 
 from painting_assist.pipeline import ControlPipeline
 
+_log = logging.getLogger(__name__)
+
 
 class _TaskSignals(QObject):
     """Signal holder for a :class:`_RenderTask` (a QRunnable cannot have signals).
 
-    ``done`` carries ``(image, generation, was_full)`` and is connected with a
-    :data:`Qt.QueuedConnection` so the result is marshalled back onto the GUI
-    thread regardless of which worker thread emits it.
+    ``done`` carries ``(image, generation, was_full, scale)`` and is connected
+    with a :data:`Qt.QueuedConnection` so the result is marshalled back onto the
+    GUI thread regardless of which worker thread emits it. ``image`` is ``None``
+    when the render raised, so the controller can clear its busy flag without
+    displaying anything.
     """
 
-    done = Signal(object, int, bool)  # (image: np.ndarray, generation, was_full)
+    done = Signal(object, int, bool, float)  # (image|None, generation, was_full, scale)
 
 
 class _RenderTask(QRunnable):
@@ -64,6 +70,7 @@ class _RenderTask(QRunnable):
         source: np.ndarray,
         states: dict,
         scale: float,
+        token: int,
         generation: int,
         signals: _TaskSignals,
     ) -> None:
@@ -72,21 +79,27 @@ class _RenderTask(QRunnable):
         self._source = source
         self._states = states
         self._scale = scale
+        self._token = token
         self._generation = generation
         self._signals = signals
 
     def run(self) -> None:  # noqa: D401 - QRunnable entry point
-        """Downscale if interactive, process, and emit ``done``."""
+        """Downscale if interactive, process, and emit ``done``.
+
+        On any exception the frame is emitted with a ``None`` image (and logged),
+        so the controller always clears its busy flag instead of wedging.
+        """
         src = self._source
         was_full = self._scale >= 1.0
         try:
             if not was_full and src is not None:
                 src = self._downscale(src, self._scale)
-            out = self._pipeline.process(src, self._states)
+            out = self._pipeline.process(src, self._states, self._token)
         except Exception:
-            # Never let a worker exception take down the pool; drop this frame.
+            _log.exception("Render task failed (generation %d)", self._generation)
+            self._signals.done.emit(None, self._generation, was_full, self._scale)
             return
-        self._signals.done.emit(out, self._generation, was_full)
+        self._signals.done.emit(out, self._generation, was_full, self._scale)
 
     @staticmethod
     def _downscale(src: np.ndarray, scale: float) -> np.ndarray:
@@ -110,10 +123,17 @@ class RenderController(QObject):
     :meth:`request`.
     """
 
-    rendered = Signal(object, bool)  # (image: np.ndarray RGB, was_full_res: bool)
+    # (image: np.ndarray RGB, was_full_res: bool, scale: float)
+    # ``scale`` is the factor the emitted image was rendered at (1.0 full-res,
+    # PREVIEW_SCALE for an interactive preview) so the view can display a
+    # downscaled preview at full on-screen size.
+    rendered = Signal(object, bool, float)
 
     PREVIEW_SCALE = 0.4
+    # Interactive (dragging) frames debounce briefly for snappy feedback; the
+    # trailing full-quality pass debounces longer to coalesce the burst.
     DEBOUNCE_MS = 24
+    DEBOUNCE_FULL_MS = 60
 
     def __init__(
         self,
@@ -140,6 +160,13 @@ class RenderController(QObject):
         self._pending = False
         self._shutdown = False
 
+        # Cache token: identifies the (source array, scale) combo so the pipeline
+        # reuses its prefix cache across frames that render the same logical
+        # source at the same scale (each interactive frame gets a fresh
+        # downscaled array, so keying on array identity alone would never hit).
+        self._source_token = 0
+        self._source_key: Optional[tuple] = None
+
     # ------------------------------------------------------------------ #
     # Public API (GUI thread)
     # ------------------------------------------------------------------ #
@@ -148,6 +175,9 @@ class RenderController(QObject):
         if self._shutdown:
             return
         self._latest_interactive = bool(interactive)
+        self._timer.setInterval(
+            self.DEBOUNCE_MS if interactive else self.DEBOUNCE_FULL_MS
+        )
         self._timer.start()
 
     def shutdown(self) -> None:
@@ -184,24 +214,37 @@ class RenderController(QObject):
         self._generation += 1
         states = self._pipeline.snapshot_states()
         scale = self.PREVIEW_SCALE if self._latest_interactive else 1.0
+        token = self._token_for(source, scale)
         self._busy = True
         task = _RenderTask(
             pipeline=self._pipeline,
             source=source,
             states=states,
             scale=scale,
+            token=token,
             generation=self._generation,
             signals=self._signals,
         )
         self._pool.start(task)
 
-    def _on_task_done(self, image: object, generation: int, was_full: bool) -> None:
-        """GUI thread (QueuedConnection): emit fresh results, drop stale ones."""
+    def _token_for(self, source: np.ndarray, scale: float) -> int:
+        """Return a cache token, bumped whenever the (source, scale) combo changes."""
+        key = (id(source), scale)
+        if key != self._source_key:
+            self._source_key = key
+            self._source_token += 1
+        return self._source_token
+
+    def _on_task_done(
+        self, image: object, generation: int, was_full: bool, scale: float
+    ) -> None:
+        """GUI thread (QueuedConnection): emit fresh results, drop stale/failed ones."""
         self._busy = False
         if self._shutdown:
             return
-        if generation == self._generation:
-            self.rendered.emit(image, was_full)
+        # image is None when the render raised; clear busy but display nothing.
+        if image is not None and generation == self._generation:
+            self.rendered.emit(image, was_full, scale)
         # If requests arrived while busy, dispatch the freshest snapshot now.
         if self._pending:
             self._pending = False

@@ -10,12 +10,13 @@ overlay genuinely needs view-level cooperation that a pure pixel filter does
 not. That glue is opt-in and degrades gracefully if no ``crop`` control exists.
 """
 
+import json
 import os
 from typing import Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -32,10 +33,25 @@ from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
 from painting_assist.widgets.image_view import ImageView
 
-APP_NAME = "Squint"
+APP_NAME = "Painting Assist"
 
 _OPEN_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)"
 _SAVE_FILTER = "PNG (*.png);;JPEG (*.jpg);;TIFF (*.tif);;All files (*)"
+
+# Image extensions accepted by drag-and-drop, mirroring the Open dialog filter.
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+# QSettings scope for persisted window geometry/state and the control session.
+_SETTINGS_ORG = "Vinay"
+_SETTINGS_APP = "Painting Assist"
+
+# Maps a chosen save filter to the extension to append when the user's path has
+# none (so a bare "portrait" saves as "portrait.png" rather than a raw file).
+_FILTER_EXT = {
+    "PNG (*.png)": ".png",
+    "JPEG (*.jpg)": ".jpg",
+    "TIFF (*.tif)": ".tif",
+}
 
 
 class MainWindow(QMainWindow):
@@ -65,6 +81,15 @@ class MainWindow(QMainWindow):
         self._crop_editing = False
         self._fit_next = False
 
+        # Last processed frame shown in the view, kept so the before/after (B-key)
+        # toggle can flip to the original and back without forcing a re-render.
+        self._last_image: Optional[np.ndarray] = None
+        self._last_scale: float = 1.0
+        self._showing_before = False
+
+        # Accept image-file drops onto the window.
+        self.setAcceptDrops(True)
+
         # Optional crop tool glue (present only if a "crop" control is registered).
         try:
             self._crop_control = self._pipeline.control("crop")
@@ -85,6 +110,9 @@ class MainWindow(QMainWindow):
         self._view.cropRectChanged.connect(self._on_crop_rect_changed)
         if self._crop_editor is not None:
             self._crop_editor.editRequested.connect(self._on_crop_edit_requested)
+
+        # ---- restore persisted window + control session (built UI first) ----
+        self._restore_session()
 
     # ------------------------------------------------------------------ #
     # Toolbar / menu
@@ -141,7 +169,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(fit_action)
         view_menu.addAction(actual_action)
 
-        self.statusBar().showMessage("Open a reference image to begin.")
+        self.statusBar().showMessage(
+            "Open a reference image to begin. Tip: hold B to compare with the original."
+        )
 
     # ------------------------------------------------------------------ #
     # Toolbar slots
@@ -157,25 +187,55 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open failed", f"Could not open image:\n{exc}")
 
     def _on_save(self) -> None:
-        """Render the current PROCESSED image at full resolution and save it."""
+        """Render the current PROCESSED image at full resolution and save it.
+
+        Renders on an *isolated* pipeline (a fresh set of controls loaded with the
+        current state) rather than the shared live pipeline, so it neither races a
+        worker that may be mid-render nor disturbs the live prefix cache.
+        """
         source = self._model.original()
         if source is None:
             QMessageBox.information(self, "Nothing to save", "Open an image first.")
             return
-        path, _ = QFileDialog.getSaveFileName(
+        path, selected = QFileDialog.getSaveFileName(
             self, "Save processed image", "", _SAVE_FILTER
         )
         if not path:
             return
+        path = self._ensure_extension(path, selected)
         try:
-            processed = self._pipeline.process(source)
-            bgr = cv2.cvtColor(
-                np.ascontiguousarray(processed, dtype=np.uint8), cv2.COLOR_RGB2BGR
-            )
-            if not cv2.imwrite(path, bgr):
-                raise IOError("cv2.imwrite returned False (unsupported extension?)")
+            save_pipeline = ControlPipeline(registry.create_all())
+            for control in self._pipeline.controls():
+                save_pipeline.control(control.id).load_state(control.to_state())
+            processed = save_pipeline.process(source)
+            self._write_image_rgb(path, processed)
         except Exception as exc:  # pragma: no cover - GUI error path
             QMessageBox.critical(self, "Save failed", f"Could not save image:\n{exc}")
+
+    @staticmethod
+    def _ensure_extension(path: str, selected_filter: str) -> str:
+        """Append an extension from the chosen filter when ``path`` lacks one."""
+        if os.path.splitext(path)[1]:
+            return path
+        return path + _FILTER_EXT.get(selected_filter, ".png")
+
+    @staticmethod
+    def _write_image_rgb(path: str, rgb: np.ndarray) -> None:
+        """Write an RGB uint8 array to ``path``, robust to unicode paths.
+
+        Encodes in-memory with ``cv2.imencode`` (keyed on the file extension) and
+        writes the bytes via ``open(..., "wb")``. ``cv2.imwrite`` mangles non-ASCII
+        paths on some platforms; encoding then writing ourselves avoids that.
+        """
+        ext = os.path.splitext(path)[1] or ".png"
+        bgr = cv2.cvtColor(
+            np.ascontiguousarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2BGR
+        )
+        ok, buf = cv2.imencode(ext, bgr)
+        if not ok:
+            raise IOError("cv2.imencode failed (unsupported extension %r?)" % ext)
+        with open(path, "wb") as handle:
+            handle.write(buf.tobytes())
 
     def _on_export_steps(self) -> None:
         """Export one image per blur stage (the coarse->fine progression).
@@ -223,15 +283,11 @@ class MainWindow(QMainWindow):
             for stage in range(1, count + 1):
                 blur.set("stage", stage)
                 processed = export_pipeline.process(source)
-                bgr = cv2.cvtColor(
-                    np.ascontiguousarray(processed, dtype=np.uint8), cv2.COLOR_RGB2BGR
-                )
                 radius = int(levels[stage - 1]) if stage - 1 < len(levels) else 0
-                fname = "squint_step_{:02d}_of_{:02d}_blur{:03d}.png".format(
+                fname = "blur_step_{:02d}_of_{:02d}_blur{:03d}.png".format(
                     stage, count, radius
                 )
-                if not cv2.imwrite(os.path.join(directory, fname), bgr):
-                    raise IOError("could not write %s" % fname)
+                self._write_image_rgb(os.path.join(directory, fname), processed)
                 written += 1
         except Exception as exc:  # pragma: no cover - GUI error path
             QMessageBox.critical(
@@ -300,12 +356,25 @@ class MainWindow(QMainWindow):
         if not down and not self._crop_editing:
             self._renderer.request(interactive=False)
 
-    def _on_rendered(self, image: object, was_full: bool) -> None:
-        """A processed image arrived: display it (ignored while cropping)."""
+    def _on_rendered(self, image: object, was_full: bool, scale: float) -> None:
+        """A processed image arrived: display it (ignored while cropping).
+
+        ``scale`` (1.0 full-res, <1 for an interactive preview) is passed through
+        so a downscaled preview is shown at full on-screen size rather than
+        shrinking to its pixel dimensions.
+        """
         if self._crop_editing:
             return
+        # Remember the processed frame so the before/after toggle can restore it
+        # without a re-render.
+        self._last_image = image
+        self._last_scale = scale
+        if self._showing_before:
+            # The user is holding B: keep showing the original, but the freshly
+            # arrived processed frame is now the one we will restore on release.
+            return
         preserve = not self._fit_next
-        self._view.set_image(image, preserve_view=preserve)
+        self._view.set_image(image, preserve_view=preserve, display_scale=scale)
         self._fit_next = False
 
     # ------------------------------------------------------------------ #
@@ -361,13 +430,150 @@ class MainWindow(QMainWindow):
         self._pipeline.set_value("crop", "rh", rh)
 
     # ------------------------------------------------------------------ #
+    # Drag and drop
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _single_dropped_image(event) -> Optional[str]:
+        """Return the local path of a single dropped image file, else ``None``.
+
+        Accepts the drop only when the payload is exactly one local file whose
+        extension is in :data:`_IMAGE_EXTS` (mirroring the Open dialog filter).
+        """
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            return None
+        urls = mime.urls()
+        if len(urls) != 1:
+            return None
+        url = urls[0]
+        if not url.isLocalFile():
+            return None
+        path = url.toLocalFile()
+        if os.path.splitext(path)[1].lower() not in _IMAGE_EXTS:
+            return None
+        return path
+
+    def dragEnterEvent(self, event) -> None:
+        """Accept the drag only for a single local image file."""
+        if self._single_dropped_image(event) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        """Load a dropped image file, mirroring the Open action's error handling."""
+        path = self._single_dropped_image(event)
+        if path is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        try:
+            self._model.load_path(path)
+        except Exception as exc:  # pragma: no cover - GUI error path
+            QMessageBox.critical(self, "Open failed", f"Could not open image:\n{exc}")
+
+    # ------------------------------------------------------------------ #
+    # Before/after toggle (hold B to view the untouched original)
+    # ------------------------------------------------------------------ #
+    def keyPressEvent(self, event) -> None:
+        """Hold B to show the untouched original; ignores key auto-repeat."""
+        if (
+            event.key() == Qt.Key_B
+            and not event.isAutoRepeat()
+            and not self._crop_editing
+            and not self._showing_before
+        ):
+            original = self._model.original()
+            if original is not None:
+                self._showing_before = True
+                self._view.set_image(original, preserve_view=True)
+                self.statusBar().showMessage("Showing original (release B to restore).")
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        """Release B to restore the last processed frame without a re-render."""
+        if (
+            event.key() == Qt.Key_B
+            and not event.isAutoRepeat()
+            and self._showing_before
+        ):
+            self._showing_before = False
+            if self._last_image is not None:
+                self._view.set_image(
+                    self._last_image, preserve_view=True, display_scale=self._last_scale
+                )
+            self.statusBar().clearMessage()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    # ------------------------------------------------------------------ #
+    # Session persistence (QSettings)
+    # ------------------------------------------------------------------ #
+    def _restore_session(self) -> None:
+        """Restore window geometry/state and the control session from QSettings.
+
+        The image file itself is deliberately NOT auto-reloaded: only the control
+        knob states are restored, and a status hint is shown if the last image is
+        still on disk. This keeps startup safe (no surprise file I/O) while
+        preserving the painter's tuning between runs.
+        """
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+
+        geometry = settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        state = settings.value("window/state")
+        if state is not None:
+            self.restoreState(state)
+
+        raw = settings.value("session/controls")
+        if raw:
+            try:
+                states = json.loads(raw)
+            except (ValueError, TypeError):
+                states = None
+            if isinstance(states, dict):
+                for control in self._pipeline.controls():
+                    control_state = states.get(control.id)
+                    if isinstance(control_state, dict):
+                        control.load_state(control_state)
+                self._panel.refresh_all()
+
+        last_path = settings.value("session/last_image")
+        if last_path and os.path.exists(last_path):
+            self.statusBar().showMessage(
+                "Last image was {} — open it to resume.".format(last_path), 6000
+            )
+
+    def _save_session(self) -> None:
+        """Persist window geometry/state and the control session to QSettings.
+
+        Called only from :meth:`closeEvent`, so a mid-session Reset is never
+        clobbered by stale saved state (the session is written on close, not live).
+        """
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("window/geometry", self.saveGeometry())
+        settings.setValue("window/state", self.saveState())
+
+        states = {
+            control.id: control.to_state()
+            for control in self._pipeline.controls()
+        }
+        settings.setValue("session/controls", json.dumps(states))
+        settings.setValue("session/last_image", self._model.path() or "")
+
+    # ------------------------------------------------------------------ #
     # Shutdown
     # ------------------------------------------------------------------ #
     def closeEvent(self, event) -> None:
-        """Stop the renderer and drain worker threads before teardown.
+        """Persist the session, stop the renderer, and drain workers before teardown.
 
-        Without this, an in-flight worker can emit back into objects that Qt has
-        already torn down, which segfaults on exit.
+        Without draining, an in-flight worker can emit back into objects that Qt
+        has already torn down, which segfaults on exit.
         """
+        self._save_session()
         self._renderer.shutdown()
         super().closeEvent(event)

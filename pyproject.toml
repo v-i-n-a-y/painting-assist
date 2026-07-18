@@ -13,8 +13,10 @@ dependencies = [
 ]
 
 [project.scripts]
-squint = "painting_assist.app:main"
 painting-assist = "painting_assist.app:main"
+
+[dependency-groups]
+dev = ["pytest"]
 
 [build-system]
 requires = ["hatchling"]

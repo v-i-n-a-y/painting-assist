@@ -17,5 +17,6 @@ No other file needs to change.
 
 from . import crop  # noqa: F401  -- registers CropControl
 from . import blur  # noqa: F401  -- registers BlurControl
+from . import quantize  # noqa: F401  -- registers ColourGroupsControl
 from . import grid  # noqa: F401  -- registers GridControl
 # add one import line here per new control

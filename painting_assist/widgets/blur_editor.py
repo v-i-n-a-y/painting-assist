@@ -68,30 +68,39 @@ class BlurEditor(QWidget):
     # Page construction
     # ====================================================================== #
     def _build_continuous_page(self) -> QWidget:
-        """Continuous page: a reversed Detail slider + spinbox (0..100)."""
+        """Continuous page: the reversed "Detail" row, reusing ``ParamWidget``.
+
+        The ``radius`` Param already declares ``reversed=True`` with a 0..100 range
+        and a " px" suffix, so the generic :class:`ParamWidget` reproduces the old
+        hand-rolled reversed slider+spin exactly (LEFT = heavy blur, RIGHT = 0).
+        Its ``valueChanged`` carries the true (un-reversed) radius, matching the
+        control's stored value, so it can drive ``paramChanged`` directly.
+        """
+        # Imported here (not at module top) to keep this control's Qt/UI deps lazy
+        # and to avoid any import ordering concerns with the panel module.
+        from painting_assist.widgets.control_panel import build_param_widget
+
         page = QWidget()
         layout = QVBoxLayout(page)
 
         layout.addWidget(QLabel("Detail"))
-        row = QHBoxLayout()
 
-        # Slider range is 0..100; slider_position = 100 - radius (reversed).
-        self._cont_slider = QSlider(Qt.Horizontal)
-        self._cont_slider.setRange(0, 100)
-        self._cont_slider.valueChanged.connect(self._on_cont_slider)
-        self._cont_slider.sliderPressed.connect(self._on_slider_pressed)
-        self._cont_slider.sliderReleased.connect(self._on_slider_released)
-        row.addWidget(self._cont_slider, 1)
+        radius_spec = self._radius_spec()
+        self._cont_param = build_param_widget(radius_spec, self._control.get("radius"))
+        # ParamWidget emits ("radius", value); forward straight to the panel.
+        self._cont_param.valueChanged.connect(self.paramChanged)
+        self._cont_param.interaction.connect(self.interaction)
+        layout.addWidget(self._cont_param)
 
-        self._cont_spin = QSpinBox()
-        self._cont_spin.setRange(0, 100)
-        self._cont_spin.setSuffix(" px")
-        self._cont_spin.valueChanged.connect(self._on_cont_spin)
-        row.addWidget(self._cont_spin)
-
-        layout.addLayout(row)
         layout.addStretch(1)
         return page
+
+    def _radius_spec(self):
+        """Return the ``radius`` :class:`Param` spec from the control's schema."""
+        for spec in self._control.params():
+            if spec.name == "radius":
+                return spec
+        raise KeyError("BlurControl has no 'radius' param")  # pragma: no cover
 
     def _build_stepped_page(self) -> QWidget:
         """Stepped page: stage count, spacing, even/manual area, stage stepper."""
@@ -233,25 +242,6 @@ class BlurEditor(QWidget):
         if self._suppress:
             return
         self.paramChanged.emit("spacing", str(spacing))
-
-    # ====================================================================== #
-    # Continuous page callbacks
-    # ====================================================================== #
-    def _on_cont_slider(self, position: int) -> None:
-        """Reversed slider moved: radius = 100 - position."""
-        if self._suppress:
-            return
-        radius = 100 - int(position)
-        self._set_silently(lambda: self._cont_spin.setValue(radius))
-        self.paramChanged.emit("radius", radius)
-
-    def _on_cont_spin(self, value: int) -> None:
-        """True radius spinbox changed: slider position = 100 - radius."""
-        if self._suppress:
-            return
-        radius = int(value)
-        self._set_silently(lambda: self._cont_slider.setValue(100 - radius))
-        self.paramChanged.emit("radius", radius)
 
     # ====================================================================== #
     # Even sub-area callbacks
@@ -399,11 +389,11 @@ class BlurEditor(QWidget):
                 self._mode_combo.setCurrentIndex(idx)
             self._stack.setCurrentIndex(1 if mode == "stepped" else 0)
 
-            # Continuous radius (reversed slider).
+            # Continuous radius (reversed slider) — ParamWidget handles the
+            # reversal and never re-emits from a programmatic set_value.
             radius = int(self._control.get("radius"))
             radius = max(0, min(100, radius))
-            self._cont_spin.setValue(radius)
-            self._cont_slider.setValue(100 - radius)
+            self._cont_param.set_value(radius)
 
             # Stage count.
             count = self._control.stage_count()

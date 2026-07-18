@@ -84,10 +84,20 @@ class ParamWidget(QWidget):
         """Effective step size for this param (1 for INT, 0.01 for FLOAT defaults)."""
         return float(self._spec.effective_step())
 
+    def _min(self) -> float:
+        """Lower bound, defaulting to 0 when the Param omits ``minimum``."""
+        return 0.0 if self._spec.minimum is None else float(self._spec.minimum)
+
+    def _max(self) -> float:
+        """Upper bound, defaulting to ``minimum + 100`` when the Param omits ``maximum``."""
+        if self._spec.maximum is None:
+            return self._min() + 100.0
+        return float(self._spec.maximum)
+
     def _slider_bounds(self) -> int:
         """Return the inclusive maximum slider position (minimum is always 0)."""
-        lo = float(self._spec.minimum)
-        hi = float(self._spec.maximum)
+        lo = self._min()
+        hi = self._max()
         step = self._step()
         if step <= 0:
             step = 1.0
@@ -95,7 +105,7 @@ class ParamWidget(QWidget):
 
     def _value_to_slider(self, value: float) -> int:
         """Map a true param value to a slider position, honouring ``reversed``."""
-        lo = float(self._spec.minimum)
+        lo = self._min()
         step = self._step()
         if step <= 0:
             step = 1.0
@@ -111,7 +121,7 @@ class ParamWidget(QWidget):
 
     def _slider_to_value(self, pos: int) -> float:
         """Map a slider position back to a true param value, honouring ``reversed``."""
-        lo = float(self._spec.minimum)
+        lo = self._min()
         step = self._step()
         if step <= 0:
             step = 1.0
@@ -131,8 +141,8 @@ class ParamWidget(QWidget):
         slider.setPageStep(max(1, self._slider_bounds() // 10))
 
         spin = QSpinBox()
-        spin.setMinimum(int(round(float(self._spec.minimum))))
-        spin.setMaximum(int(round(float(self._spec.maximum))))
+        spin.setMinimum(int(round(self._min())))
+        spin.setMaximum(int(round(self._max())))
         spin.setSingleStep(max(1, int(round(self._step()))))
         if self._spec.suffix:
             spin.setSuffix(self._spec.suffix)
@@ -163,8 +173,8 @@ class ParamWidget(QWidget):
         slider.setPageStep(max(1, self._slider_bounds() // 10))
 
         spin = QDoubleSpinBox()
-        spin.setMinimum(float(self._spec.minimum))
-        spin.setMaximum(float(self._spec.maximum))
+        spin.setMinimum(self._min())
+        spin.setMaximum(self._max())
         spin.setSingleStep(self._step())
         spin.setDecimals(self._decimals_for_step())
         if self._spec.suffix:

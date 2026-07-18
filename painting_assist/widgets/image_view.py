@@ -56,26 +56,39 @@ class ImageView(QGraphicsView):
             | QPainter.SmoothPixmapTransform
             | QPainter.Antialiasing
         )
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         # Whether an image has ever been shown (first image always fits).
         self._has_image = False
 
-    def set_image(self, rgb: np.ndarray, preserve_view: bool = True) -> None:
+    def set_image(
+        self,
+        rgb: np.ndarray,
+        preserve_view: bool = True,
+        display_scale: float = 1.0,
+    ) -> None:
         """Display ``rgb`` (RGB uint8 HxWx3) by swapping the pixmap on the reused item.
 
         On the first image (or when ``preserve_view`` is False) the view fits the
         image to the window. Otherwise the current zoom/pan are kept so slider
         drags do not cause the view to jump or refit.
+
+        ``display_scale`` is the factor the incoming pixels were rendered at
+        relative to the full image (1.0 for a full-res frame, e.g. 0.4 for an
+        interactive preview). The pixmap item is scaled by ``1 / display_scale``
+        and the scene rect kept at full-image size, so a downscaled preview
+        occupies the same on-screen geometry as the full frame instead of
+        visibly shrinking during slider drags.
         """
         pixmap = ndarray_to_qpixmap(rgb)
         self._item.setPixmap(pixmap)
-        # Keep the scene rectangle tight around the current pixmap.
-        self._scene.setSceneRect(self._item.boundingRect())
+        self._item.setScale(1.0 / display_scale if display_scale > 0 else 1.0)
+        # Keep the scene rectangle at full-image size (item scale accounted for).
+        scene_rect = self._item.sceneBoundingRect()
+        self._scene.setSceneRect(scene_rect)
         if self._crop_item is not None:
-            self._crop_item.set_image_rect(self._item.boundingRect())
+            self._crop_item.set_image_rect(scene_rect)
 
         first_image = not self._has_image
         self._has_image = True
