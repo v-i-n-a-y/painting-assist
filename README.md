@@ -221,3 +221,7 @@ stepper or the interactive crop tool. For those, override
 UI. The Blur and Crop controls are worked examples.
 
 The generic `ParamType` set is `INT`, `FLOAT`, `BOOL`, `CHOICE` and `TEXT`.
+
+## Licence
+
+Released under the MIT Licence. See [`LICENSE`](LICENSE) for the full text.

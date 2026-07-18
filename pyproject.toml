@@ -5,6 +5,8 @@ name = "painting-assist"
 version = "0.4.1"
 description = "Painting Assist, a coarse to fine painting reference tool"
 requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     # PySide6 pinned to 6.8.1.1: 6.11.x fails to load its Qt platform plugins
     # under the bundled macOS interpreters.
