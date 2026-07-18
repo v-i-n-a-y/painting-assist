@@ -1,4 +1,4 @@
-# Squint
+# Painting Assist
 
 A coarse-to-fine painting **reference** tool. You load a reference photo and
 manipulate how it is *displayed* — never the original — so you can paint from a
