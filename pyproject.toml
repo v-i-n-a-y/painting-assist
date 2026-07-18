@@ -16,7 +16,7 @@ dependencies = [
 painting-assist = "painting_assist.app:main"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "pyinstaller"]
 
 [build-system]
 requires = ["hatchling"]

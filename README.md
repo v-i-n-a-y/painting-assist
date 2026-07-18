@@ -45,6 +45,30 @@ keeps your canvas proportions), then **Apply crop**. Turn the lock **off** for a
 is stored as fractions of the image, so it is resolution-independent and fully
 non-destructive.
 
+## Install
+
+Prebuilt installers for each release are on the
+[**Releases**](https://github.com/v-i-n-a-y/painting-assist/releases) page:
+
+| Platform      | Download                                                       |
+| ------------- | ------------------------------------------------------------- |
+| macOS (Apple) | `PaintingAssist-<version>-macos-arm64.dmg`                     |
+| macOS (Intel) | `PaintingAssist-<version>-macos-x86_64.dmg`                    |
+| Windows       | `PaintingAssist-<version>-windows-x64-setup.exe`              |
+| Linux         | `PaintingAssist-<version>-linux-x86_64.AppImage` (or `.tar.gz`)|
+
+- **macOS** — open the DMG and drag *Painting Assist* to Applications. The build
+  is unsigned, so on first launch right-click the app and choose **Open**.
+- **Windows** — run the setup `.exe` (installs to Program Files, with Start Menu
+  and optional desktop shortcuts).
+- **Linux** — `chmod +x` the AppImage and run it, or extract the `.tar.gz` and
+  run the `PaintingAssist` binary inside.
+
+To run from source instead, see [Running](#running) below (`uv run painting-assist`).
+
+Building installers locally and the tagged-release flow are documented in
+[`packaging/README.md`](packaging/README.md).
+
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/) for environment management
@@ -66,11 +90,8 @@ non-destructive.
 ## Running
 
 ```bash
-uv sync            # create the venv and install everything
-uv run squint      # launch the app
-# equivalently:
-uv run painting-assist
-uv run python run.py
+uv sync                 # create the venv and install everything
+uv run painting-assist  # launch the app
 ```
 
 Toolbar: **Open** (Ctrl+O), **Save** (Ctrl+S), **Export Blur Steps** (Ctrl+E) ·
@@ -78,7 +99,7 @@ Toolbar: **Open** (Ctrl+O), **Save** (Ctrl+S), **Export Blur Steps** (Ctrl+E) ·
 
 **Export Blur Steps** writes the whole coarse→fine progression in one click: set
 the Blur control to **Stepped** mode, press the button, choose a folder, and you
-get one PNG per stage (`squint_step_01_of_05_blur080.png` …), each with your crop
+get one PNG per stage (`blur_step_01_of_05_blur080.png` …), each with your crop
 and grid applied — heaviest blocking through to sharp.
 
 In the image view, scroll to zoom about the cursor and
@@ -96,7 +117,7 @@ frames so only the newest result is shown.
 ## Tests
 
 ```bash
-uv run python tests/test_pipeline.py    # headless pipeline (crop + blur) — PASS/FAIL
+uv run pytest                           # headless suite (pipeline, cache, controls)
 uv run python tests/test_gui_smoke.py   # builds the window, drives the crop flow — PASS/FAIL
 ```
 
