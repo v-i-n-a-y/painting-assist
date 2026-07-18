@@ -302,12 +302,15 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._export_action)
         file_menu.addSeparator()
 
-        settings_action = QAction("Settings…", self)
-        # macOS relocates this into the application menu as Preferences.
-        settings_action.setMenuRole(QAction.PreferencesRole)
-        settings_action.setShortcut(QKeySequence.Preferences)
-        settings_action.triggered.connect(self._on_settings)
-        file_menu.addAction(settings_action)
+        # Keep Settings in the File menu on every platform. macOS would normally
+        # relocate a PreferencesRole action into the application menu, but under
+        # the frozen bundle that merge doesn't reliably land, leaving no Settings
+        # entry anywhere — so we pin it here with NoRole. Cmd+, still works.
+        self._settings_action = QAction("Settings…", self)
+        self._settings_action.setMenuRole(QAction.NoRole)
+        self._settings_action.setShortcut(QKeySequence.Preferences)
+        self._settings_action.triggered.connect(self._on_settings)
+        file_menu.addAction(self._settings_action)
         file_menu.addSeparator()
 
         quit_action = QAction("Quit", self)
@@ -334,11 +337,13 @@ class MainWindow(QMainWindow):
         check_updates_action.triggered.connect(self._on_check_updates)
         help_menu.addAction(check_updates_action)
 
-        about_action = QAction("About Painting Assist", self)
-        # On macOS Qt relocates this into the application menu automatically.
-        about_action.setMenuRole(QAction.AboutRole)
-        about_action.triggered.connect(self._on_about)
-        help_menu.addAction(about_action)
+        # Pin About in the Help menu too (same reason as Settings above: the
+        # macOS app-menu relocation for AboutRole doesn't reliably land in the
+        # frozen bundle).
+        self._about_action = QAction("About Painting Assist", self)
+        self._about_action.setMenuRole(QAction.NoRole)
+        self._about_action.triggered.connect(self._on_about)
+        help_menu.addAction(self._about_action)
 
     # ------------------------------------------------------------------ #
     # Recent files (File ▸ Open Recent)

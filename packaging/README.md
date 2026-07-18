@@ -5,7 +5,7 @@ Native installers for Painting Assist are built with
 packaging tools. The shared build spec is `packaging/painting_assist.spec` and
 the frozen entry point is `packaging/launch.py`.
 
-The app version is currently hardcoded as `0.4.0` in three places that must be
+The app version is currently hardcoded as `0.4.1` in three places that must be
 kept in sync when it changes:
 
 - `pyproject.toml` (`version`)
@@ -35,7 +35,7 @@ STAGE="$(mktemp -d)"
 cp -R "dist/Painting Assist.app" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "Painting Assist" -srcfolder "$STAGE" \
-  -ov -format UDZO dist/PaintingAssist-0.4.0-macos-arm64.dmg
+  -ov -format UDZO dist/PaintingAssist-0.4.1-macos-arm64.dmg
 rm -rf "$STAGE"
 ```
 
@@ -49,7 +49,7 @@ uv run pyinstaller packaging/painting_assist.spec --noconfirm
 # -> dist/Painting Assist/PaintingAssist.exe
 
 iscc packaging\windows_installer.iss
-# -> dist/PaintingAssist-0.4.0-windows-x64-setup.exe
+# -> dist/PaintingAssist-0.4.1-windows-x64-setup.exe
 ```
 
 Requires [Inno Setup](https://jrsoftware.org/isinfo.php) (`iscc` on PATH). It is
@@ -80,16 +80,16 @@ To cut a release:
 
 ```sh
 # bump the version in the three places listed above, commit, then:
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 The matrix produces:
 
 | Platform        | Artifact                                        |
 | --------------- | ----------------------------------------------- |
-| macOS arm64     | `PaintingAssist-0.4.0-macos-arm64.dmg`          |
-| macOS x86_64    | `PaintingAssist-0.4.0-macos-x86_64.dmg`         |
-| Windows x64     | `PaintingAssist-0.4.0-windows-x64-setup.exe`    |
-| Linux x86_64    | `PaintingAssist-0.4.0-linux-x86_64.AppImage`    |
-| Linux x86_64    | `PaintingAssist-0.4.0-linux-x86_64.tar.gz`      |
+| macOS arm64     | `PaintingAssist-0.4.1-macos-arm64.dmg`          |
+| macOS x86_64    | `PaintingAssist-0.4.1-macos-x86_64.dmg`         |
+| Windows x64     | `PaintingAssist-0.4.1-windows-x64-setup.exe`    |
+| Linux x86_64    | `PaintingAssist-0.4.1-linux-x86_64.AppImage`    |
+| Linux x86_64    | `PaintingAssist-0.4.1-linux-x86_64.tar.gz`      |
