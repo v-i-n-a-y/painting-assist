@@ -26,6 +26,11 @@ from PySide6.QtWidgets import (
 
 from painting_assist.utils.image_qt import ndarray_to_qpixmap
 from painting_assist.widgets.crop_item import CropItem
+from painting_assist.widgets.measure_items import (
+    AngleGaugeItem,
+    CaliperItem,
+    GuidesItem,
+)
 
 _EYEDROPPER_CURSOR: Optional[QCursor] = None
 
@@ -169,6 +174,10 @@ class ImageView(QGraphicsView):
     # independent (the window samples its full processed frame at these coords).
     colourSampled = Signal(float, float)
 
+    # Emitted by the active measure tool: a human-readable readout string (an
+    # angle, a length ratio, or guide positions) for the status bar.
+    measureChanged = Signal(str)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         """Create the scene + single pixmap item and configure interaction modes."""
         super().__init__(parent)
@@ -181,6 +190,11 @@ class ImageView(QGraphicsView):
         self._crop_item: Optional[CropItem] = None
         self._crop_editing = False
         self._eyedropper = False
+
+        # Lazily created measure overlays, keyed by mode name; only one is
+        # visible at a time (see set_measure_mode).
+        self._measure_items: Dict[str, QGraphicsItem] = {}
+        self._measure_mode: Optional[str] = None
 
         # Non-destructive grid overlay, drawn above the pixmap.
         self._grid_item = GridOverlayItem()
@@ -231,6 +245,9 @@ class ImageView(QGraphicsView):
         # Keep the grid overlay aligned across image swaps and re-renders
         # (including the hold-B before/after swaps, which go through here).
         self._grid_item.set_geometry(scene_rect)
+        # Keep any measure overlays aligned to the new frame too.
+        for item in self._measure_items.values():
+            item.set_image_rect(scene_rect)
 
         first_image = not self._has_image
         self._has_image = True
@@ -310,6 +327,61 @@ class ImageView(QGraphicsView):
         self.cropRectChanged.emit(
             rect.x() / w, rect.y() / h, rect.width() / w, rect.height() / h
         )
+
+    # ------------------------------------------------------------------ #
+    # Interactive measuring overlays
+    # ------------------------------------------------------------------ #
+    def set_measure_mode(self, mode: Optional[str]) -> None:
+        """Activate one measuring tool, or clear all of them (``None``).
+
+        ``mode`` is one of ``"angle"``, ``"caliper"``, ``"guides"`` or ``None``.
+        The chosen tool's item is created lazily on first use and reused after.
+        While a tool is active, panning is disabled (like the crop overlay) so
+        the item receives mouse events; the wheel still zooms. ``None`` hides
+        every tool and restores pan (unless the crop overlay is being edited).
+
+        Measure mode and the eyedropper are mutually exclusive; the caller
+        enforces that, but ``set_measure_mode(None)`` fully clears measure state.
+        """
+        for item in self._measure_items.values():
+            item.hide()
+
+        if mode is None:
+            self._measure_mode = None
+            if not self._crop_editing and not self._eyedropper:
+                self.setDragMode(QGraphicsView.ScrollHandDrag)
+            return
+
+        if self._item.pixmap().isNull():
+            return
+
+        item = self._ensure_measure_item(mode)
+        item.show()
+        self._measure_mode = mode
+        self.setDragMode(QGraphicsView.NoDrag)
+        self.measureChanged.emit(item.readout())
+
+    def measure_mode(self) -> Optional[str]:
+        """Return the active measure tool name, or ``None``."""
+        return self._measure_mode
+
+    def _ensure_measure_item(self, mode: str) -> QGraphicsItem:
+        """Return the item for ``mode``, creating and wiring it on first use."""
+        scene_rect = self._item.sceneBoundingRect()
+        existing = self._measure_items.get(mode)
+        if existing is not None:
+            existing.set_image_rect(scene_rect)
+            return existing
+        factory = {
+            "angle": AngleGaugeItem,
+            "caliper": CaliperItem,
+            "guides": GuidesItem,
+        }[mode]
+        item = factory(scene_rect)
+        item.changed.connect(self.measureChanged)
+        self._scene.addItem(item)
+        self._measure_items[mode] = item
+        return item
 
     # ------------------------------------------------------------------ #
     # Eyedropper

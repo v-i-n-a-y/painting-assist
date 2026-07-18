@@ -22,17 +22,18 @@ import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QSettings, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import (
+    QApplication,
     QDockWidget,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
     QToolBar,
 )
 
-from painting_assist import __author__, __version__, theme, updater
+from painting_assist import __author__, __version__, colour_mixing, theme, updater
 from painting_assist.controls import registry
 from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
@@ -40,7 +41,11 @@ from painting_assist.pipeline import ControlPipeline
 from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
 from painting_assist.widgets.image_view import ImageView
-from painting_assist.widgets.palette_panel import PalettePanel, format_readout
+from painting_assist.widgets.palette_panel import (
+    PalettePanel,
+    format_readout,
+    render_palette_strip,
+)
 from painting_assist.widgets.settings_dialog import (
     DEFAULT_THEME,
     DEFAULT_UPDATE_HOURS,
@@ -48,6 +53,9 @@ from painting_assist.widgets.settings_dialog import (
 )
 
 APP_NAME = "Painting Assist"
+
+# Default limited palette used for the eyedropper's mixing suggestions.
+_MIX_PALETTE = "zorn"
 
 _OPEN_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)"
 _SAVE_FILTER = "PNG (*.png);;JPEG (*.jpg);;TIFF (*.tif);;All files (*)"
@@ -69,6 +77,9 @@ _FILTER_EXT = {
 
 # How many entries the File ▸ Open Recent list retains.
 _MAX_RECENT = 8
+
+# How many control-state snapshots the undo history keeps.
+_UNDO_LIMIT = 50
 
 
 def update_recent(paths: list, new_path: str, limit: int = _MAX_RECENT) -> list:
@@ -141,6 +152,9 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, palette_dock)
         self._palette_dock = palette_dock
 
+        # Latest colour-group palette (for export); kept in step with renders.
+        self._current_palette: list = []
+
         self._slider_down = False
         self._crop_editing = False
         self._fit_next = False
@@ -169,6 +183,15 @@ class MainWindow(QMainWindow):
 
         # Recent-files list (most-recent-first), persisted in QSettings.
         self._recent: list = []
+
+        # Undo/redo of the whole control session. Each entry is a
+        # {control_id: to_state()} snapshot, the same unit Save and the session
+        # use. Applying a snapshot is guarded by ``_applying_state`` so the
+        # panel's programmatic refresh does not record itself as a fresh edit.
+        self._undo_stack: list = []
+        self._redo_stack: list = []
+        self._applying_state = False
+        self._committed_state: dict = {}
 
         # ---- settings (theme + automatic update checks) ----
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
@@ -210,13 +233,21 @@ class MainWindow(QMainWindow):
         if self._crop_editor is not None:
             self._crop_editor.editRequested.connect(self._on_crop_edit_requested)
 
-        # ---- eyedropper ----
+        # ---- eyedropper + palette ----
         self._view.colourSampled.connect(self._on_colour_sampled)
+        self._palette_panel.swatchClicked.connect(self._on_swatch_clicked)
+
+        # ---- measure tools readout ----
+        self._view.measureChanged.connect(self._on_measure_changed)
 
         # ---- restore persisted window + control session (built UI first) ----
         self._restore_session()
         self._update_grid_overlay()
         self._apply_update_schedule()
+
+        # Baseline for undo/redo: the just-restored state, with empty history.
+        self._committed_state = self._capture_state()
+        self._update_undo_actions()
 
     # ------------------------------------------------------------------ #
     # Toolbar / menu
@@ -277,6 +308,40 @@ class MainWindow(QMainWindow):
         self._eyedropper_action.toggled.connect(self._on_eyedropper_toggled)
         toolbar.addAction(self._eyedropper_action)
 
+        # Measure tools: mutually exclusive checkable buttons; clicking the
+        # active one again returns to no measuring. Kept in a dict so the
+        # eyedropper (and each other) can clear them.
+        self._measure_actions = {}
+        for mode, label, tip in (
+            ("angle", "Angle", "Measure the angle of a line from horizontal"),
+            ("caliper", "Caliper", "Compare one length against another"),
+            ("guides", "Guides", "Drag a plumb and horizon line to check verticals"),
+        ):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setStatusTip(tip)
+            act.toggled.connect(
+                lambda checked, m=mode: self._on_measure_toggled(m, checked)
+            )
+            toolbar.addAction(act)
+            self._measure_actions[mode] = act
+
+        toolbar.addSeparator()
+
+        self._undo_action = QAction("Undo", self)
+        self._undo_action.setShortcut(QKeySequence.Undo)  # Ctrl+Z
+        self._undo_action.setStatusTip("Undo the last control change")
+        self._undo_action.triggered.connect(self._on_undo)
+        self._undo_action.setEnabled(False)
+        toolbar.addAction(self._undo_action)
+
+        self._redo_action = QAction("Redo", self)
+        self._redo_action.setShortcut(QKeySequence.Redo)  # Ctrl+Shift+Z
+        self._redo_action.setStatusTip("Redo the last undone control change")
+        self._redo_action.triggered.connect(self._on_redo)
+        self._redo_action.setEnabled(False)
+        toolbar.addAction(self._redo_action)
+
         toolbar.addSeparator()
 
         self._reset_action = QAction("Reset", self)
@@ -302,6 +367,29 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(self._save_action)
         file_menu.addAction(self._export_action)
+
+        self._export_palette_action = QAction("Export Palette…", self)
+        self._export_palette_action.setStatusTip(
+            "Save the current colour-group swatches as a PNG strip"
+        )
+        self._export_palette_action.setEnabled(False)
+        self._export_palette_action.triggered.connect(self._on_export_palette)
+        file_menu.addAction(self._export_palette_action)
+        file_menu.addSeparator()
+
+        save_preset_action = QAction("Save Preset…", self)
+        save_preset_action.setStatusTip(
+            "Save the current control settings as a named preset"
+        )
+        save_preset_action.triggered.connect(self._on_save_preset)
+        file_menu.addAction(save_preset_action)
+
+        self._preset_menu = file_menu.addMenu("Apply Preset")
+        self._preset_menu.aboutToShow.connect(self._rebuild_preset_menu)
+
+        delete_preset_action = QAction("Delete Preset…", self)
+        delete_preset_action.triggered.connect(self._on_delete_preset)
+        file_menu.addAction(delete_preset_action)
         file_menu.addSeparator()
 
         # Keep Settings in the File menu on every platform. macOS would normally
@@ -321,11 +409,20 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addAction(self._undo_action)
+        edit_menu.addAction(self._redo_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self._reset_action)
+
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self._dock.toggleViewAction())
         view_menu.addAction(self._palette_dock.toggleViewAction())
         view_menu.addSeparator()
         view_menu.addAction(self._eyedropper_action)
+        measure_menu = view_menu.addMenu("Measure")
+        for mode in ("angle", "caliper", "guides"):
+            measure_menu.addAction(self._measure_actions[mode])
         view_menu.addSeparator()
         view_menu.addAction(self._fit_action)
         view_menu.addAction(self._actual_action)
@@ -402,6 +499,168 @@ class MainWindow(QMainWindow):
         settings.setValue("session/recent", json.dumps(self._recent))
 
     # ------------------------------------------------------------------ #
+    # Undo / redo (whole control-session snapshots)
+    # ------------------------------------------------------------------ #
+    def _capture_state(self) -> dict:
+        """Return a {control_id: to_state()} snapshot of every control."""
+        return {c.id: c.to_state() for c in self._pipeline.controls()}
+
+    def _commit_state(self) -> None:
+        """Record the current control state as an undo point, if it changed.
+
+        Called at natural edit boundaries (a discrete param change, a slider
+        release, an enable toggle, a crop apply, a reset, a preset apply). The
+        pre-change state is what gets pushed, so an undo restores it. No-op while
+        a snapshot is being applied, or when nothing actually changed.
+        """
+        if self._applying_state:
+            return
+        snapshot = self._capture_state()
+        if snapshot == self._committed_state:
+            return
+        self._undo_stack.append(self._committed_state)
+        if len(self._undo_stack) > _UNDO_LIMIT:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._committed_state = snapshot
+        self._update_undo_actions()
+
+    def _apply_state(self, state: dict) -> None:
+        """Load a control-session snapshot, refresh the panel and re-render.
+
+        Guarded by ``_applying_state`` so the panel's programmatic refresh does
+        not feed back through the param/enable slots as a new edit.
+        """
+        self._applying_state = True
+        try:
+            for control in self._pipeline.controls():
+                control_state = state.get(control.id)
+                if isinstance(control_state, dict):
+                    control.load_state(control_state)
+            self._panel.refresh_all()
+        finally:
+            self._applying_state = False
+        self._committed_state = self._capture_state()
+        self._update_export_enabled()
+        self._update_grid_overlay()
+        self._request_render(interactive=False)
+
+    def _reset_history(self) -> None:
+        """Drop undo/redo history and rebaseline (used when a new image loads)."""
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._committed_state = self._capture_state()
+        self._update_undo_actions()
+
+    def _update_undo_actions(self) -> None:
+        """Enable Undo/Redo only when there is something to undo/redo."""
+        self._undo_action.setEnabled(bool(self._undo_stack))
+        self._redo_action.setEnabled(bool(self._redo_stack))
+
+    def _on_undo(self) -> None:
+        """Restore the previous control-session snapshot."""
+        if not self._undo_stack:
+            return
+        if self._crop_editing:
+            self._end_crop_edit(render=False)
+        self._redo_stack.append(self._committed_state)
+        self._apply_state(self._undo_stack.pop())
+        self._update_undo_actions()
+        self.statusBar().showMessage("Undo", 2000)
+
+    def _on_redo(self) -> None:
+        """Re-apply the most recently undone control-session snapshot."""
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(self._committed_state)
+        self._apply_state(self._redo_stack.pop())
+        self._update_undo_actions()
+        self.statusBar().showMessage("Redo", 2000)
+
+    # ------------------------------------------------------------------ #
+    # Presets (named control-session snapshots)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _load_presets() -> dict:
+        """Read the persisted presets ({name: snapshot}) from QSettings."""
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        raw = settings.value("settings/presets")
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _store_presets(presets: dict) -> None:
+        """Persist the presets dict to QSettings as JSON."""
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("settings/presets", json.dumps(presets))
+
+    def _on_save_preset(self) -> None:
+        """Prompt for a name and save the current control settings as a preset."""
+        name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        presets = self._load_presets()
+        if name in presets:
+            answer = QMessageBox.question(
+                self,
+                "Overwrite preset?",
+                "A preset named '{}' already exists. Overwrite it?".format(name),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        presets[name] = self._capture_state()
+        self._store_presets(presets)
+        self.statusBar().showMessage("Saved preset '{}'.".format(name), 4000)
+
+    def _rebuild_preset_menu(self) -> None:
+        """Repopulate the Apply Preset submenu from the saved presets."""
+        menu = self._preset_menu
+        menu.clear()
+        presets = self._load_presets()
+        if not presets:
+            empty = menu.addAction("(No presets saved)")
+            empty.setEnabled(False)
+            return
+        for name in sorted(presets):
+            act = menu.addAction(name)
+            act.triggered.connect(lambda _checked=False, n=name: self._apply_preset(n))
+
+    def _apply_preset(self, name: str) -> None:
+        """Apply a saved preset by name and record it as an undo point."""
+        presets = self._load_presets()
+        state = presets.get(name)
+        if not isinstance(state, dict):
+            return
+        if self._crop_editing:
+            self._end_crop_edit(render=False)
+        self._apply_state(state)
+        self._commit_state()
+        self.statusBar().showMessage("Applied preset '{}'.".format(name), 4000)
+
+    def _on_delete_preset(self) -> None:
+        """Choose a preset to delete."""
+        presets = self._load_presets()
+        if not presets:
+            QMessageBox.information(self, "No presets", "There are no saved presets.")
+            return
+        name, ok = QInputDialog.getItem(
+            self, "Delete Preset", "Preset:", sorted(presets), 0, False
+        )
+        if not ok or name not in presets:
+            return
+        del presets[name]
+        self._store_presets(presets)
+        self.statusBar().showMessage("Deleted preset '{}'.".format(name), 4000)
+
+    # ------------------------------------------------------------------ #
     # Help
     # ------------------------------------------------------------------ #
     def _on_about(self) -> None:
@@ -422,10 +681,13 @@ class MainWindow(QMainWindow):
             "Ctrl+E\tExport blur steps\n"
             "Ctrl+0\tFit to window\n"
             "Ctrl+1\tActual size (1:1)\n"
+            "Ctrl+Z\tUndo\n"
+            "Ctrl+Shift+Z\tRedo\n"
             "Ctrl+Q\tQuit\n"
             "\n"
             "Hold B\tShow the original (before/after)\n"
             "V\tToggle the Values control\n"
+            "F\tToggle the Flip control\n"
             "I\tEyedropper (click the image to read a colour)",
         )
 
@@ -463,6 +725,18 @@ class MainWindow(QMainWindow):
             return
         self._pipeline.set_enabled("values", not control.enabled)
         self._panel.refresh_all()
+        self._commit_state()
+        self._request_render(interactive=False)
+
+    def _toggle_flip(self) -> None:
+        """Toggle the Flip control's enabled state (F shortcut) and re-render."""
+        try:
+            control = self._pipeline.control("flip")
+        except KeyError:
+            return
+        self._pipeline.set_enabled("flip", not control.enabled)
+        self._panel.refresh_all()
+        self._commit_state()
         self._request_render(interactive=False)
 
     # ------------------------------------------------------------------ #
@@ -651,6 +925,9 @@ class MainWindow(QMainWindow):
             # Crop editing owns the mouse; refuse to arm.
             self._eyedropper_action.setChecked(False)
             return
+        if active:
+            # Eyedropper and the measure tools both want the mouse; only one.
+            self._clear_measure_tools()
         self._view.set_eyedropper(active)
         if active:
             self.statusBar().showMessage(
@@ -658,21 +935,103 @@ class MainWindow(QMainWindow):
             )
 
     def _on_colour_sampled(self, xn: float, yn: float) -> None:
-        """The eyedropper picked normalised coords: read the processed pixel.
+        """The eyedropper picked normalised coords: read the processed colour.
 
         Samples the last processed frame (what the painter is actually looking
-        at), not the untouched original — during a slider drag that frame is the
-        0.4-scale preview, which is fine for reading colour.
+        at), not the untouched original. The palette panel's sample size sets an
+        odd window that is averaged, so a noisy pixel does not mislead a mix
+        match. During a slider drag the frame is the 0.4-scale preview, which is
+        fine for reading colour.
         """
         image = self._last_image
         if image is None:
             return
         h, w = image.shape[:2]
-        x = min(w - 1, max(0, int(xn * w)))
-        y = min(h - 1, max(0, int(yn * h)))
-        rgb = tuple(int(c) for c in image[y, x])
+        cx = min(w - 1, max(0, int(xn * w)))
+        cy = min(h - 1, max(0, int(yn * h)))
+        radius = max(0, self._palette_panel.sample_size() // 2)
+        y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
+        x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
+        region = image[y0:y1, x0:x1].reshape(-1, image.shape[2])
+        rgb = tuple(int(round(v)) for v in region.mean(axis=0))
         self._palette_panel.set_sample(rgb)
+        self._palette_panel.set_mixing(self._mix_text(rgb))
         self.statusBar().showMessage(format_readout(rgb))
+
+    def _on_swatch_clicked(self, rgb: tuple) -> None:
+        """A palette swatch was clicked: show a mixing suggestion for it."""
+        rgb = tuple(int(c) for c in rgb)
+        self._palette_panel.set_mixing(self._mix_text(rgb))
+
+    @staticmethod
+    def _mix_text(rgb: tuple) -> str:
+        """Build a short mixing-and-description string for a colour."""
+        info = colour_mixing.describe_colour(rgb)
+        parts = colour_mixing.suggest_mix(rgb, _MIX_PALETTE)
+        label = colour_mixing.BASE_PALETTES[_MIX_PALETTE]["label"]
+        recipe = ", ".join(
+            "{} {:.0f}%".format(name, share * 100) for name, share in parts
+        )
+        return (
+            "{value:.0f}% value · {temperature} {hue_name} · {modifier}\n"
+            "{label}: {recipe}"
+        ).format(label=label, recipe=recipe, **info)
+
+    # ------------------------------------------------------------------ #
+    # Measure tools
+    # ------------------------------------------------------------------ #
+    def _on_measure_toggled(self, mode: str, checked: bool) -> None:
+        """A measure-tool button toggled: activate that mode (or clear it)."""
+        if not checked:
+            # Turning the active tool off returns to no measuring.
+            if self._view.measure_mode() == mode:
+                self._view.set_measure_mode(None)
+            return
+        if self._crop_editing:
+            self._measure_actions[mode].setChecked(False)
+            return
+        # One measure tool at a time, and never together with the eyedropper.
+        if self._eyedropper_action.isChecked():
+            self._eyedropper_action.setChecked(False)
+        for other, act in self._measure_actions.items():
+            if other != mode and act.isChecked():
+                act.blockSignals(True)
+                act.setChecked(False)
+                act.blockSignals(False)
+        self._view.set_measure_mode(mode)
+
+    def _clear_measure_tools(self) -> None:
+        """Deactivate any measure tool and untick its button."""
+        for act in self._measure_actions.values():
+            if act.isChecked():
+                act.blockSignals(True)
+                act.setChecked(False)
+                act.blockSignals(False)
+        self._view.set_measure_mode(None)
+
+    def _on_measure_changed(self, readout: str) -> None:
+        """Show the active measure tool's live readout in the status bar."""
+        self.statusBar().showMessage(readout)
+
+    def _on_export_palette(self) -> None:
+        """Save the current colour-group swatches as a PNG strip."""
+        if not self._current_palette:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export palette", "palette.png", "PNG (*.png)"
+        )
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".png"
+        try:
+            render_palette_strip(self._current_palette).save(path)
+        except Exception as exc:  # pragma: no cover - GUI/IO error path
+            QMessageBox.critical(
+                self, "Export failed", "Could not save palette:\n{}".format(exc)
+            )
+            return
+        self.statusBar().showMessage("Palette saved.", 4000)
 
     # ------------------------------------------------------------------ #
     # Toolbar slots
@@ -815,6 +1174,7 @@ class MainWindow(QMainWindow):
         self._slider_down = False
         self._update_export_enabled()
         self._update_grid_overlay()
+        self._commit_state()
         self._request_render(interactive=False)
 
     def _on_fit(self) -> None:
@@ -836,6 +1196,8 @@ class MainWindow(QMainWindow):
         path = self._model.path()
         if path:
             self._add_recent(path)
+        # Undo history is per-reference; a fresh image starts a clean slate.
+        self._reset_history()
         self._request_render(interactive=False)
         self.statusBar().showMessage("Reference loaded.", 4000)
 
@@ -856,6 +1218,10 @@ class MainWindow(QMainWindow):
             return
         # A blur mode change flips whether Export Blur Steps is available.
         self._update_export_enabled()
+        # A discrete change (combo, checkbox, spin) is its own undo point; a
+        # slider drag commits once on release instead of on every tick.
+        if not self._slider_down:
+            self._commit_state()
         self._request_render(interactive=self._slider_down)
 
     def _on_enabled(self, cid: str, enabled: bool) -> None:
@@ -870,12 +1236,14 @@ class MainWindow(QMainWindow):
         if self._crop_editing:
             return
         self._update_export_enabled()
+        self._commit_state()
         self._request_render(interactive=False)
 
     def _on_interaction(self, down: bool) -> None:
         """Slider pressed/released: track drag state; on release do a full pass."""
         self._slider_down = down
         if not down and not self._crop_editing:
+            self._commit_state()
             self._request_render(interactive=False)
 
     def _on_rendered(
@@ -894,9 +1262,12 @@ class MainWindow(QMainWindow):
         # while the Colour groups control is active, absent (-> clear) otherwise.
         palette = metadata.get("palette") if isinstance(metadata, dict) else None
         if palette:
+            self._current_palette = [tuple(int(c) for c in rgb) for rgb in palette]
             self._palette_panel.set_colours(palette)
         else:
+            self._current_palette = []
             self._palette_panel.clear()
+        self._export_palette_action.setEnabled(bool(self._current_palette))
         if self._crop_editing:
             return
         # Remember the processed frame so the before/after toggle can restore it
@@ -932,8 +1303,9 @@ class MainWindow(QMainWindow):
                 self._crop_editor.set_editing(False)
             return
 
-        # Crop editing owns the mouse; disarm the eyedropper first.
+        # Crop editing owns the mouse; disarm the eyedropper and measure tools.
         self._eyedropper_action.setChecked(False)
+        self._clear_measure_tools()
 
         # Cropping only matters when the control is enabled; turn it on and
         # reflect that in the dock checkbox.
@@ -957,6 +1329,7 @@ class MainWindow(QMainWindow):
             self._crop_editor.set_editing(False)
         if render:
             self._fit_next = True
+            self._commit_state()
             self._request_render(interactive=False)
 
     def _on_crop_rect_changed(self, rx: float, ry: float, rw: float, rh: float) -> None:
@@ -1035,6 +1408,14 @@ class MainWindow(QMainWindow):
             and not self._crop_editing
         ):
             self._toggle_values()
+            event.accept()
+            return
+        if (
+            event.key() == Qt.Key_F
+            and not event.isAutoRepeat()
+            and not self._crop_editing
+        ):
+            self._toggle_flip()
             event.accept()
             return
         super().keyPressEvent(event)

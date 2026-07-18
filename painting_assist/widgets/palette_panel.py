@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -88,6 +89,33 @@ def format_readout(rgb: Sequence[int]) -> str:
     )
 
 
+def render_palette_strip(
+    colours: Sequence[Sequence[int]], swatch: int = 64, height: int = 64
+) -> "object":
+    """Draw ``colours`` as side-by-side swatches into an RGB Pillow image.
+
+    Pure Pillow/numpy so it is importable and callable without a running
+    QApplication (the lead uses it to save a PNG). Each colour occupies a
+    ``swatch`` wide by ``height`` tall block; the returned image is
+    ``swatch * len(colours)`` wide. An empty palette yields a 1x``height``
+    black image so callers always get a valid image back.
+    """
+    from PIL import Image  # local import: keep module usable without Pillow
+
+    swatch = max(1, int(swatch))
+    height = max(1, int(height))
+    triples = [
+        (int(c[0]) & 0xFF, int(c[1]) & 0xFF, int(c[2]) & 0xFF) for c in (colours or [])
+    ]
+    if not triples:
+        return Image.new("RGB", (1, height), (0, 0, 0))
+
+    arr = np.zeros((height, swatch * len(triples), 3), dtype=np.uint8)
+    for i, triple in enumerate(triples):
+        arr[:, i * swatch : (i + 1) * swatch] = triple
+    return Image.fromarray(arr, mode="RGB")
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
@@ -128,6 +156,7 @@ class PalettePanel(QWidget):
     """
 
     swatchClicked = Signal(tuple)  # (r, g, b)
+    sampleSizeChanged = Signal(int)  # odd sampling radius in pixels
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -141,6 +170,27 @@ class PalettePanel(QWidget):
         self._strip.setContentsMargins(0, 0, 0, 0)
         self._strip.setSpacing(2)
         outer.addLayout(self._strip)
+
+        # Eyedropper sampling radius: how many pixels to region-average when
+        # picking a colour. Odd values keep the sample centred on the cursor.
+        size_row = QWidget()
+        size_layout = QHBoxLayout(size_row)
+        size_layout.setContentsMargins(0, 0, 0, 0)
+        size_layout.setSpacing(8)
+        size_label = QLabel("Sample size")
+        size_layout.addWidget(size_label)
+        self._sample_size = QSpinBox()
+        self._sample_size.setRange(1, 51)
+        self._sample_size.setSingleStep(2)
+        self._sample_size.setValue(1)
+        self._sample_size.setSuffix(" px")
+        self._sample_size.setToolTip(
+            "Region-average radius for the eyedropper (odd, in pixels)."
+        )
+        self._sample_size.valueChanged.connect(self._on_sample_size_changed)
+        size_layout.addWidget(self._sample_size)
+        size_layout.addStretch(1)
+        outer.addWidget(size_row)
 
         # Dedicated "sampled colour" slot, kept clearly apart from the palette
         # strip above so a lone sample is not mistaken for a palette entry. A
@@ -172,6 +222,14 @@ class PalettePanel(QWidget):
         self._readout.setWordWrap(True)
         outer.addWidget(self._readout)
 
+        # A short multi-line mixing recipe for the sampled colour; hidden until
+        # set_mixing() supplies text.
+        self._mixing = QLabel("")
+        self._mixing.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._mixing.setWordWrap(True)
+        self._mixing.setVisible(False)
+        outer.addWidget(self._mixing)
+
         self._placeholder = QLabel("Enable Colour groups to see its palette.")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setEnabled(False)
@@ -200,6 +258,7 @@ class PalettePanel(QWidget):
             self._readout.setText("")
             self._sample_divider.setVisible(False)
             self._sample_row.setVisible(False)
+            self.set_mixing(None)
             return
         triple: RGB = (int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF)
         self._sample_swatch.set_rgb(triple)
@@ -207,8 +266,21 @@ class PalettePanel(QWidget):
         self._sample_row.setVisible(True)
         self._readout.setText(format_readout(triple))
 
+    def set_mixing(self, text: Optional[str]) -> None:
+        """Show a short multi-line mixing recipe beneath the readout (hide if None)."""
+        if text is None or not str(text).strip():
+            self._mixing.setText("")
+            self._mixing.setVisible(False)
+            return
+        self._mixing.setText(str(text))
+        self._mixing.setVisible(True)
+
+    def sample_size(self) -> int:
+        """Return the current eyedropper region-average radius in pixels."""
+        return int(self._sample_size.value())
+
     def clear(self) -> None:
-        """Remove all swatches, the sample slot and the readout."""
+        """Remove all swatches, the sample slot, mixing text and the readout."""
         self._clear_swatches()
         self.set_sample(None)
         self._placeholder.setVisible(True)
@@ -222,6 +294,9 @@ class PalettePanel(QWidget):
             swatch.setParent(None)
             swatch.deleteLater()
         self._swatches = []
+
+    def _on_sample_size_changed(self, value: int) -> None:
+        self.sampleSizeChanged.emit(int(value))
 
     def _on_swatch_clicked(self, rgb: RGB) -> None:
         clipboard = QGuiApplication.clipboard()

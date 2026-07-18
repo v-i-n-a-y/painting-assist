@@ -26,6 +26,13 @@ The main control, in two modes.
   time keeps you honest, since you have to settle the big blocking at Stage 1
   before any detail is allowed in.
 
+### Flip, check your drawing
+
+Mirrors the reference horizontally, the oldest trick for catching drawing
+errors. Toggle it from the Flip section in the dock or with the F key. A
+vertical flip is available too. Because it sits in the pipeline everything
+downstream, including the eyedropper and Save, sees the flipped image.
+
 ### Tone, judge temperature and contrast
 
 Global contrast, saturation and temperature knobs, all neutral at zero. Tone
@@ -51,12 +58,25 @@ hex and read its value percentage, hue angle and chroma.
 - Isolate band dims everything outside one chosen value band, so you can study a
   single value mass on its own.
 
-### Eyedropper, read any colour
+### Eyedropper, read any colour and match a mix
 
 Press I (or use the toolbar button), then click the image to read the colour you
 are actually looking at. The hex, RGB, value percentage, hue and chroma appear
-in the status bar and the Palette panel, which is handy for checking a mix
-against the processed reference.
+in the status bar and the Palette panel. Set the sample size in the Palette
+panel to average a small area rather than one noisy pixel, which matters when
+you are matching a colour for the mid layers. Alongside the reading the panel
+suggests an approximate mix from a limited palette, for example the Zorn earth
+set, as a rough starting point rather than a precise recipe. Clicking any
+colour-group swatch gives the same suggestion for that swatch, and Export
+Palette under the File menu writes the swatches out as a PNG strip.
+
+### Measure and proportion
+
+Under View then Measure you get three drag-on-the-image tools. Angle reports the
+angle of a line from horizontal for sight-size checks. Caliper compares one
+length against another and shows the ratio. Guides drops a plumb and a horizon
+line for checking verticals and horizontals. The readout follows in the status
+bar as you drag.
 
 ### Grid, position by the grid method
 
@@ -129,9 +149,13 @@ uv run painting-assist  # launch the app
 ```
 
 The toolbar carries Open (Ctrl+O), Save (Ctrl+S), Export Blur Steps (Ctrl+E),
-Fit (Ctrl+0), 1:1 (Ctrl+1), Eyedropper (I) and Reset. The File menu adds Open
-Recent and Settings, and the Help menu lists every shortcut, including hold B for
-before and after and V for the Values toggle. Your window layout, control
+Fit (Ctrl+0), 1:1 (Ctrl+1), Eyedropper (I), the measure tools, Undo (Ctrl+Z),
+Redo (Ctrl+Shift+Z) and Reset. Undo and redo step through your control changes,
+one edit at a time. The File menu adds Open Recent, Settings, and presets: Save
+Preset stores your current control settings under a name, and Apply Preset
+brings them back on any reference, which is handy for a repeatable underpainting
+recipe. The Help menu lists every shortcut, including hold B for before and
+after, V for the Values toggle and F for Flip. Your window layout, control
 settings and last image are all restored on the next launch.
 
 Settings lives under File and lets you pick the theme, either matching the
