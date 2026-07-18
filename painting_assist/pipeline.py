@@ -27,6 +27,7 @@ class _CacheEntry:
 
     chain_key: Tuple[Any, ...]
     image: np.ndarray
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ControlPipeline:
@@ -84,6 +85,7 @@ class ControlPipeline:
         source: np.ndarray,
         states: Optional[Dict[str, ControlState]] = None,
         token: Optional[Any] = None,
+        metadata_out: Optional[Dict[str, Any]] = None,
     ) -> np.ndarray:
         """Apply active controls in order over `source`, reusing cached prefixes.
 
@@ -98,6 +100,12 @@ class ControlPipeline:
         omitted it falls back to ``id(source)``; this is only safe for one-shot
         callers (Save/Export on an isolated pipeline) because a freed array's id can
         be reused by a later, different array.
+
+        If `metadata_out` is given, it is filled with the side-channel outputs
+        (see :meth:`Control.emit_metadata`) of every active stage this call
+        touches, including stages served from the prefix cache — the metadata is
+        cached alongside each stage's image, so a palette does not vanish when
+        the quantize stage is a cache hit.
         """
         if token is None:
             token = id(source)
@@ -117,15 +125,22 @@ class ControlPipeline:
             if entry is not None and entry.chain_key == chain_key:
                 # Hit: reuse this stage's cached output as the input to the next.
                 current = entry.image
+                if metadata_out is not None and entry.metadata:
+                    metadata_out.update(entry.metadata)
                 continue
 
             # Miss: compute this stage from the current input.
+            stage_meta: Dict[str, Any] = {}
             if active:
-                output = self._run_stage(control, current, states)
+                output = self._run_stage(control, current, states, stage_meta)
             else:
                 output = current
 
-            self._cache[i] = _CacheEntry(chain_key=chain_key, image=output)
+            self._cache[i] = _CacheEntry(
+                chain_key=chain_key, image=output, metadata=stage_meta
+            )
+            if metadata_out is not None and stage_meta:
+                metadata_out.update(stage_meta)
             self._invalidate_from(i + 1)
             current = output
 
@@ -181,17 +196,28 @@ class ControlPipeline:
         control: Control,
         current: np.ndarray,
         states: Optional[Dict[str, ControlState]],
+        stage_meta: Dict[str, Any],
     ) -> np.ndarray:
         """Run control.process(current) under the given snapshot (or live state).
 
-        With a snapshot, ``process_snapshot`` runs against a throwaway copy so the
-        live control is never mutated on the worker thread.
+        Any metadata the control emits during the run is collected into
+        ``stage_meta``. With a snapshot, ``process_snapshot_meta`` runs against a
+        throwaway copy so the live control is never mutated on the worker thread.
         """
         if states is None:
-            return control.process(current)
+            control._metadata = {}
+            out = control.process(current)
+            if control._metadata:
+                stage_meta.update(control._metadata)
+            return out
 
         state = states[control.id]
-        return control.process_snapshot(current, state.enabled, state.values)
+        out, meta = control.process_snapshot_meta(
+            current, state.enabled, state.values
+        )
+        if meta:
+            stage_meta.update(meta)
+        return out
 
     def _invalidate_from(self, i: int) -> None:
         """Null cache slots i..end (downstream stages stale)."""

@@ -28,13 +28,41 @@ The flagship control, in two modes:
   Working stage by stage keeps you honest: nail the big blocking at Stage 1
   before letting any detail in.
 
+### Tone — judge temperature and contrast
+Global **contrast**, **saturation** and **temperature** knobs, all neutral at
+zero. Runs early in the pipeline (right after the crop), so the value and
+colour-group tools below see the adjusted image. Warm/cool shifts are done in
+Lab space, which keeps them perceptually honest.
+
+### Colour groups — flat colour masses
+Reduces the reference to a handful of flat colour masses (Lab k-means), like a
+poster study — set the number of **colours** and an optional **smooth** to
+consolidate speckle before grouping. The colours it finds appear as clickable
+swatches in the **Palette** panel below the image: click one to copy its hex
+and read its value %, hue angle and chroma.
+
+### Values — the value story
+- **Greyscale** — replace colour with neutral grey of the same perceptual
+  lightness, a pure value study. Toggle it any time with **V**.
+- **Value steps** — posterize lightness into 2–8 flat bands (2–3 = notan);
+  **Keep colour** posterizes the values but keeps each pixel's hue
+  (value-grouped colour, useful in the mid layers).
+- **Isolate band** — dim everything outside one chosen value band so you can
+  study a single value mass at a time.
+
+### Eyedropper — read any colour
+Press **I** (or the toolbar button), then click the image to read the colour
+you are actually looking at — hex, RGB, value %, hue and chroma appear in the
+status bar and the Palette panel. Handy for checking a mix against the
+processed reference.
+
 ### Grid — position by the grid method
-Overlay an even **columns × rows** grid to transfer proportions and placement
-onto a matching grid on your canvas. Pick the colour, opacity and line width,
-and optionally add corner-to-corner **diagonals** to find the centre. The grid
-is drawn last (on top of crop + blur), so it divides your *cropped* region and
-stays crisp over a blurred block-in. It's included when you Save, so you can
-print a gridded reference.
+An even **columns × rows** grid to transfer proportions and placement onto a
+matching grid on your canvas. Pick the colour, opacity and line width, and
+optionally add corner-to-corner **diagonals** to find the centre. The grid is a
+**viewer overlay** — crisp at any zoom, never baked into the processed pixels —
+and when you Save or export with it showing, you're asked whether to draw it
+into the file (so you can still print a gridded reference).
 
 ### Canvas & Crop — match your surface
 Enter your canvas' **width × height** (any unit — only the ratio matters). With
@@ -95,12 +123,16 @@ uv run painting-assist  # launch the app
 ```
 
 Toolbar: **Open** (Ctrl+O), **Save** (Ctrl+S), **Export Blur Steps** (Ctrl+E) ·
-**Fit** (Ctrl+0), **1:1** (Ctrl+1) · **Reset**.
+**Fit** (Ctrl+0), **1:1** (Ctrl+1) · **Eyedropper** (I) · **Reset**. The File
+menu adds **Open Recent** and the Help menu lists every shortcut (hold **B**
+for before/after, **V** for the Values toggle). Your window layout, control
+settings and last image are restored on the next launch.
 
 **Export Blur Steps** writes the whole coarse→fine progression in one click: set
 the Blur control to **Stepped** mode, press the button, choose a folder, and you
 get one PNG per stage (`blur_step_01_of_05_blur080.png` …), each with your crop
-and grid applied — heaviest blocking through to sharp.
+applied (and the grid drawn in, if you say yes when asked) — heaviest blocking
+through to sharp.
 
 In the image view, scroll to zoom about the cursor and
 drag to pan; the view survives slider re-renders so it never jumps while you

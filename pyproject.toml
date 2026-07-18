@@ -1,6 +1,6 @@
 [project]
 name = "painting-assist"
-version = "0.2.0"
+version = "0.3.0"
 description = "Squint — a coarse-to-fine painting reference tool"
 requires-python = ">=3.9"
 dependencies = [

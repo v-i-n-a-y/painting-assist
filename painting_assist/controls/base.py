@@ -103,6 +103,10 @@ class Control:
     def __init__(self) -> None:
         self._values: Dict[str, Any] = {p.name: p.default for p in self.params()}
         self.enabled: bool = False        # painter opts a control in
+        # Per-run scratch for optional side-channel outputs (e.g. a palette).
+        # process() may write into it via emit_metadata(); the pipeline resets
+        # and harvests it around each stage, so it never accumulates across runs.
+        self._metadata: Dict[str, Any] = {}
 
     # ---- the two things every subclass MUST declare ----
     @classmethod
@@ -120,6 +124,17 @@ class Control:
         Called by the pipeline only when is_active() is True.
         """
         raise NotImplementedError
+
+    def emit_metadata(self, key: str, value: Any) -> None:
+        """Record a side-channel output for this run (harvested by the pipeline).
+
+        Controls whose :meth:`process` derives useful auxiliary data (for the
+        Colour groups control, the k-means palette) can surface it without
+        changing the ``img -> img`` return contract. The pipeline resets this
+        scratch before each stage runs and reads it back afterwards, caching it
+        alongside the stage's image so a cache hit re-serves the metadata too.
+        """
+        self._metadata[key] = value
 
     # ---- optional custom UI (concrete controls may override) ----
     def create_editor(self, parent: Optional["object"] = None) -> Optional["object"]:
@@ -205,6 +220,20 @@ class Control:
     ) -> np.ndarray:
         """Run :meth:`process` against a (enabled, values) snapshot, side-effect free."""
         return self._snapshot_clone(enabled, values).process(img)
+
+    def process_snapshot_meta(
+        self, img: np.ndarray, enabled: bool, values: Dict[str, Any]
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Run :meth:`process` against a snapshot and return (image, metadata).
+
+        The throwaway clone is created here, so any metadata ``process`` emits
+        into it can be read back off the return path — the live control is never
+        touched, which is exactly what the worker thread needs.
+        """
+        clone = self._snapshot_clone(enabled, values)
+        clone._metadata = {}
+        out = clone.process(img)
+        return out, clone._metadata
 
     def is_active_snapshot(self, enabled: bool, values: Dict[str, Any]) -> bool:
         """Evaluate :meth:`is_active` against a snapshot, side-effect free."""

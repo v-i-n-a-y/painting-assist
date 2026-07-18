@@ -21,17 +21,20 @@ from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QToolBar,
 )
 
 from painting_assist.controls import registry
+from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
 from painting_assist.pipeline import ControlPipeline
 from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
 from painting_assist.widgets.image_view import ImageView
+from painting_assist.widgets.palette_panel import PalettePanel, format_readout
 
 APP_NAME = "Painting Assist"
 
@@ -52,6 +55,47 @@ _FILTER_EXT = {
     "JPEG (*.jpg)": ".jpg",
     "TIFF (*.tif)": ".tif",
 }
+
+# How many entries the File ▸ Open Recent list retains.
+_MAX_RECENT = 8
+
+
+def update_recent(paths: list, new_path: str, limit: int = _MAX_RECENT) -> list:
+    """Return ``paths`` with ``new_path`` moved to the front, deduped, capped.
+
+    Paths are compared by their absolute form so the same file reached via a
+    relative and an absolute path is not duplicated. Order is most-recent-first.
+    Pure function (no filesystem access) so it is trivially unit-testable.
+    """
+    front = os.path.abspath(new_path)
+    result = [front]
+    seen = {front}
+    for p in paths:
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        result.append(p)
+        if len(result) >= limit:
+            break
+    return result[:limit]
+
+
+def prune_recent(paths: list) -> list:
+    """Return ``paths`` with duplicates and no-longer-existing files removed.
+
+    Order is preserved. Comparison for dedupe is by absolute path.
+    """
+    seen = set()
+    out = []
+    for p in paths:
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        if os.path.exists(p):
+            out.append(p)
+    return out
 
 
 class MainWindow(QMainWindow):
@@ -77,6 +121,15 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self._dock = dock
 
+        # ---- palette dock (swatches from the Colour groups control) ----
+        self._palette_panel = PalettePanel()
+        palette_dock = QDockWidget("Palette", self)
+        palette_dock.setObjectName("palette_dock")
+        palette_dock.setWidget(self._palette_panel)
+        palette_dock.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        self.addDockWidget(Qt.BottomDockWidgetArea, palette_dock)
+        self._palette_dock = palette_dock
+
         self._slider_down = False
         self._crop_editing = False
         self._fit_next = False
@@ -97,7 +150,18 @@ class MainWindow(QMainWindow):
             self._crop_control = None
         self._crop_editor = self._panel.editor("crop")
 
+        # Optional grid overlay glue (present only if a "grid" control exists).
+        try:
+            self._grid_control = self._pipeline.control("grid")
+        except KeyError:
+            self._grid_control = None
+
+        # Recent-files list (most-recent-first), persisted in QSettings.
+        self._recent: list = []
+
         self._build_toolbar()
+        self._build_menus()
+        self._update_export_enabled()
 
         # ---- the responsiveness signal graph ----
         self._model.image_loaded.connect(self._on_image_loaded)
@@ -111,67 +175,308 @@ class MainWindow(QMainWindow):
         if self._crop_editor is not None:
             self._crop_editor.editRequested.connect(self._on_crop_edit_requested)
 
+        # ---- eyedropper ----
+        self._view.colourSampled.connect(self._on_colour_sampled)
+
         # ---- restore persisted window + control session (built UI first) ----
         self._restore_session()
+        self._update_grid_overlay()
 
     # ------------------------------------------------------------------ #
     # Toolbar / menu
     # ------------------------------------------------------------------ #
     def _build_toolbar(self) -> None:
-        """Build the Open/Save | Fit/1:1 | Reset toolbar and a View menu."""
+        """Create the shared QActions and the Open/Save | Fit/1:1 | Reset toolbar.
+
+        The actions are stored on ``self`` so :meth:`_build_menus` can reuse the
+        very same objects (a menu item and its toolbar button then share enabled
+        state, shortcut, and tooltip — e.g. the Export action is disabled in both
+        places at once when Blur is not in Stepped mode).
+        """
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("main_toolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        open_action = QAction("Open", self)
-        open_action.setShortcut(QKeySequence.Open)  # Ctrl+O
-        open_action.setStatusTip("Open a reference image")
-        open_action.triggered.connect(self._on_open)
-        toolbar.addAction(open_action)
+        self._open_action = QAction("Open", self)
+        self._open_action.setShortcut(QKeySequence.Open)  # Ctrl+O
+        self._open_action.setStatusTip("Open a reference image")
+        self._open_action.triggered.connect(self._on_open)
+        toolbar.addAction(self._open_action)
 
-        save_action = QAction("Save", self)
-        save_action.setShortcut(QKeySequence.Save)  # Ctrl+S
-        save_action.setStatusTip("Save the processed image you currently see")
-        save_action.triggered.connect(self._on_save)
-        toolbar.addAction(save_action)
+        self._save_action = QAction("Save", self)
+        self._save_action.setShortcut(QKeySequence.Save)  # Ctrl+S
+        self._save_action.setStatusTip("Save the processed image you currently see")
+        self._save_action.triggered.connect(self._on_save)
+        toolbar.addAction(self._save_action)
 
-        export_action = QAction("Export Blur Steps", self)
-        export_action.setShortcut(QKeySequence("Ctrl+E"))
-        export_action.setStatusTip(
+        self._export_action = QAction("Export Blur Steps", self)
+        self._export_action.setShortcut(QKeySequence("Ctrl+E"))
+        self._export_action.setStatusTip(
             "Export one image per blur stage (Blur must be in Stepped mode)"
         )
-        export_action.triggered.connect(self._on_export_steps)
-        toolbar.addAction(export_action)
+        self._export_action.triggered.connect(self._on_export_steps)
+        toolbar.addAction(self._export_action)
 
         toolbar.addSeparator()
 
-        fit_action = QAction("Fit", self)
-        fit_action.setShortcut(QKeySequence("Ctrl+0"))
-        fit_action.triggered.connect(self._on_fit)
-        toolbar.addAction(fit_action)
+        self._fit_action = QAction("Fit", self)
+        self._fit_action.setShortcut(QKeySequence("Ctrl+0"))
+        self._fit_action.triggered.connect(self._on_fit)
+        toolbar.addAction(self._fit_action)
 
-        actual_action = QAction("1:1", self)
-        actual_action.setShortcut(QKeySequence("Ctrl+1"))
-        actual_action.triggered.connect(self._on_actual_size)
-        toolbar.addAction(actual_action)
+        self._actual_action = QAction("1:1", self)
+        self._actual_action.setShortcut(QKeySequence("Ctrl+1"))
+        self._actual_action.triggered.connect(self._on_actual_size)
+        toolbar.addAction(self._actual_action)
 
         toolbar.addSeparator()
 
-        reset_action = QAction("Reset", self)
-        reset_action.setStatusTip("Reset all controls (keeps the image)")
-        reset_action.triggered.connect(self._on_reset)
-        toolbar.addAction(reset_action)
+        self._eyedropper_action = QAction("Eyedropper", self)
+        self._eyedropper_action.setShortcut(QKeySequence("I"))
+        self._eyedropper_action.setCheckable(True)
+        self._eyedropper_action.setStatusTip(
+            "Click the image to read a colour (hex, value, hue, chroma)"
+        )
+        self._eyedropper_action.toggled.connect(self._on_eyedropper_toggled)
+        toolbar.addAction(self._eyedropper_action)
 
-        view_menu = self.menuBar().addMenu("View")
-        view_menu.addAction(self._dock.toggleViewAction())
-        view_menu.addSeparator()
-        view_menu.addAction(fit_action)
-        view_menu.addAction(actual_action)
+        toolbar.addSeparator()
+
+        self._reset_action = QAction("Reset", self)
+        self._reset_action.setStatusTip("Reset all controls (keeps the image)")
+        self._reset_action.triggered.connect(self._on_reset)
+        toolbar.addAction(self._reset_action)
+
+        # Permanent right-side status-bar label reflecting the renderer's activity.
+        self._busy_label = QLabel("")
+        self.statusBar().addPermanentWidget(self._busy_label)
 
         self.statusBar().showMessage(
             "Open a reference image to begin. Tip: hold B to compare with the original."
         )
+
+    def _build_menus(self) -> None:
+        """Build the File / View / Help menu bar from the shared actions."""
+        file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction(self._open_action)
+
+        self._recent_menu = file_menu.addMenu("Open Recent")
+        self._recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
+
+        file_menu.addAction(self._save_action)
+        file_menu.addAction(self._export_action)
+        file_menu.addSeparator()
+
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        quit_action.setStatusTip("Quit Painting Assist")
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        view_menu = self.menuBar().addMenu("View")
+        view_menu.addAction(self._dock.toggleViewAction())
+        view_menu.addAction(self._palette_dock.toggleViewAction())
+        view_menu.addSeparator()
+        view_menu.addAction(self._eyedropper_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self._fit_action)
+        view_menu.addAction(self._actual_action)
+
+        help_menu = self.menuBar().addMenu("Help")
+        shortcuts_action = QAction("Keyboard Shortcuts", self)
+        shortcuts_action.triggered.connect(self._on_shortcuts)
+        help_menu.addAction(shortcuts_action)
+
+    # ------------------------------------------------------------------ #
+    # Recent files (File ▸ Open Recent)
+    # ------------------------------------------------------------------ #
+    def _rebuild_recent_menu(self) -> None:
+        """Repopulate the Open Recent submenu, pruning files that have vanished."""
+        pruned = prune_recent(self._recent)
+        if pruned != self._recent:
+            self._recent = pruned
+            self._save_recent()
+
+        menu = self._recent_menu
+        menu.clear()
+        if not self._recent:
+            empty = menu.addAction("(No recent files)")
+            empty.setEnabled(False)
+            return
+        for path in self._recent:
+            act = menu.addAction(path)
+            act.triggered.connect(
+                lambda _checked=False, p=path: self._open_recent(p)
+            )
+        menu.addSeparator()
+        clear = menu.addAction("Clear Recent")
+        clear.triggered.connect(self._clear_recent)
+
+    def _add_recent(self, path: str) -> None:
+        """Record ``path`` as the most-recently-opened image and persist the list."""
+        self._recent = update_recent(self._recent, path)
+        self._save_recent()
+
+    def _open_recent(self, path: str) -> None:
+        """Open a path chosen from the Open Recent menu (prune it if it's gone)."""
+        if not os.path.exists(path):
+            QMessageBox.information(
+                self, "File missing",
+                "That file is no longer available:\n{}".format(path),
+            )
+            self._recent = prune_recent(self._recent)
+            self._save_recent()
+            return
+        try:
+            self._model.load_path(path)
+        except Exception as exc:  # pragma: no cover - GUI error path
+            QMessageBox.critical(self, "Open failed", f"Could not open image:\n{exc}")
+
+    def _clear_recent(self) -> None:
+        """Empty the recent-files list."""
+        self._recent = []
+        self._save_recent()
+
+    def _save_recent(self) -> None:
+        """Persist the recent-files list to QSettings as a JSON array."""
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("session/recent", json.dumps(self._recent))
+
+    # ------------------------------------------------------------------ #
+    # Help
+    # ------------------------------------------------------------------ #
+    def _on_shortcuts(self) -> None:
+        """Show a simple dialog listing the keyboard shortcuts."""
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            "Ctrl+O\tOpen image\n"
+            "Ctrl+S\tSave processed image\n"
+            "Ctrl+E\tExport blur steps\n"
+            "Ctrl+0\tFit to window\n"
+            "Ctrl+1\tActual size (1:1)\n"
+            "Ctrl+Q\tQuit\n"
+            "\n"
+            "Hold B\tShow the original (before/after)\n"
+            "V\tToggle the Values control\n"
+            "I\tEyedropper (click the image to read a colour)",
+        )
+
+    # ------------------------------------------------------------------ #
+    # Render request + busy indicator
+    # ------------------------------------------------------------------ #
+    def _request_render(self, interactive: bool) -> None:
+        """Ask the renderer for a frame and show the busy indicator until it lands."""
+        self._renderer.request(interactive=interactive)
+        self._busy_label.setText("Rendering…")
+
+    def _update_export_enabled(self) -> None:
+        """Enable Export Blur Steps only when a Blur control is in Stepped mode."""
+        try:
+            stepped = str(self._pipeline.control("blur").get("mode")) == "stepped"
+        except KeyError:
+            stepped = False
+        self._export_action.setEnabled(stepped)
+        self._export_action.setToolTip(
+            "Export one image per blur stage"
+            if stepped
+            else "Requires Blur in Stepped mode"
+        )
+
+    def _toggle_values(self) -> None:
+        """Toggle the Values control's enabled state (V shortcut) and re-render.
+
+        Mirrors exactly what ticking the dock checkbox does: flips the control's
+        enabled flag on the pipeline, re-syncs the panel so the checkbox follows,
+        and requests a full-quality render. No-ops if there is no Values control.
+        """
+        try:
+            control = self._pipeline.control("values")
+        except KeyError:
+            return
+        self._pipeline.set_enabled("values", not control.enabled)
+        self._panel.refresh_all()
+        self._request_render(interactive=False)
+
+    # ------------------------------------------------------------------ #
+    # Grid overlay glue
+    # ------------------------------------------------------------------ #
+    def _update_grid_overlay(self) -> None:
+        """Sync the viewer's non-destructive grid overlay with the grid control."""
+        if self._grid_control is None:
+            self._view.set_grid_overlay(None)
+            return
+        self._view.set_grid_overlay(self._grid_control.overlay_spec())
+
+    def _ask_bake_grid(self) -> Optional[dict]:
+        """Ask whether files being written should include the grid lines.
+
+        The grid is a viewer overlay and no longer part of the pipeline output,
+        so saving would silently drop it. When the overlay is showing, ask once
+        (default No) and return the overlay spec to bake with, else ``None``.
+        """
+        if self._grid_control is None:
+            return None
+        spec = self._grid_control.overlay_spec()
+        if not spec.get("visible"):
+            return None
+        answer = QMessageBox.question(
+            self,
+            "Include grid?",
+            "The grid overlay is showing. Draw the grid lines into the saved "
+            "image as well?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return spec if answer == QMessageBox.Yes else None
+
+    @staticmethod
+    def _bake_grid(processed: np.ndarray, spec: Optional[dict]) -> np.ndarray:
+        """Draw grid lines per ``spec`` into ``processed`` (no-op when None)."""
+        if spec is None:
+            return processed
+        return draw_grid(
+            processed,
+            spec["columns"],
+            spec["rows"],
+            spec["color_rgb"],
+            spec["opacity"],
+            spec["thickness"],
+            spec["diagonals"],
+        )
+
+    # ------------------------------------------------------------------ #
+    # Eyedropper
+    # ------------------------------------------------------------------ #
+    def _on_eyedropper_toggled(self, active: bool) -> None:
+        """Toolbar/menu toggle: arm or disarm the viewer's eyedropper mode."""
+        if active and self._crop_editing:
+            # Crop editing owns the mouse; refuse to arm.
+            self._eyedropper_action.setChecked(False)
+            return
+        self._view.set_eyedropper(active)
+        if active:
+            self.statusBar().showMessage(
+                "Eyedropper: click the image to read a colour.", 4000
+            )
+
+    def _on_colour_sampled(self, xn: float, yn: float) -> None:
+        """The eyedropper picked normalised coords: read the processed pixel.
+
+        Samples the last processed frame (what the painter is actually looking
+        at), not the untouched original — during a slider drag that frame is the
+        0.4-scale preview, which is fine for reading colour.
+        """
+        image = self._last_image
+        if image is None:
+            return
+        h, w = image.shape[:2]
+        x = min(w - 1, max(0, int(xn * w)))
+        y = min(h - 1, max(0, int(yn * h)))
+        rgb = tuple(int(c) for c in image[y, x])
+        self._palette_panel.set_sample(rgb)
+        self.statusBar().showMessage(format_readout(rgb))
 
     # ------------------------------------------------------------------ #
     # Toolbar slots
@@ -208,6 +513,7 @@ class MainWindow(QMainWindow):
             for control in self._pipeline.controls():
                 save_pipeline.control(control.id).load_state(control.to_state())
             processed = save_pipeline.process(source)
+            processed = self._bake_grid(processed, self._ask_bake_grid())
             self._write_image_rgb(path, processed)
         except Exception as exc:  # pragma: no cover - GUI error path
             QMessageBox.critical(self, "Save failed", f"Could not save image:\n{exc}")
@@ -278,11 +584,15 @@ class MainWindow(QMainWindow):
         count = blur.stage_count()
         levels = blur.stage_levels()
 
+        # Ask once whether the (viewer-overlay) grid should be drawn into the files.
+        bake_spec = self._ask_bake_grid()
+
         written = 0
         try:
             for stage in range(1, count + 1):
                 blur.set("stage", stage)
                 processed = export_pipeline.process(source)
+                processed = self._bake_grid(processed, bake_spec)
                 radius = int(levels[stage - 1]) if stage - 1 < len(levels) else 0
                 fname = "blur_step_{:02d}_of_{:02d}_blur{:03d}.png".format(
                     stage, count, radius
@@ -307,7 +617,9 @@ class MainWindow(QMainWindow):
             self._end_crop_edit(render=False)
         self._panel.reset_all()
         self._slider_down = False
-        self._renderer.request(interactive=False)
+        self._update_export_enabled()
+        self._update_grid_overlay()
+        self._request_render(interactive=False)
 
     def _on_fit(self) -> None:
         self._view.fit_to_window()
@@ -325,12 +637,20 @@ class MainWindow(QMainWindow):
         original = self._model.original()
         if original is not None:
             self._view.set_image(original, preserve_view=False)
-        self._renderer.request(interactive=False)
+        path = self._model.path()
+        if path:
+            self._add_recent(path)
+        self._request_render(interactive=False)
         self.statusBar().showMessage("Reference loaded.", 4000)
 
     def _on_param(self, cid: str, name: str, value: object) -> None:
         """A param value changed: update the pipeline and request a render."""
         self._pipeline.set_value(cid, name, value)
+        if cid == "grid":
+            # The grid is a viewer overlay, not a pipeline stage — repaint the
+            # overlay directly; no render needed.
+            self._update_grid_overlay()
+            return
         if self._crop_editing:
             # While cropping we show the untouched original + overlay; just keep
             # the overlay's locked aspect in step with the canvas dimensions.
@@ -338,31 +658,49 @@ class MainWindow(QMainWindow):
                 aspect = self._crop_control.aspect() if self._crop_control else None
                 self._view.set_crop_aspect(aspect)
             return
-        self._renderer.request(interactive=self._slider_down)
+        # A blur mode change flips whether Export Blur Steps is available.
+        self._update_export_enabled()
+        self._request_render(interactive=self._slider_down)
 
     def _on_enabled(self, cid: str, enabled: bool) -> None:
         """A control was toggled on/off: update the pipeline, full-quality render."""
         self._pipeline.set_enabled(cid, enabled)
+        if cid == "grid":
+            self._update_grid_overlay()
+            return
         if self._crop_editing and cid == "crop" and not enabled:
             self._end_crop_edit(render=True)
             return
         if self._crop_editing:
             return
-        self._renderer.request(interactive=False)
+        self._update_export_enabled()
+        self._request_render(interactive=False)
 
     def _on_interaction(self, down: bool) -> None:
         """Slider pressed/released: track drag state; on release do a full pass."""
         self._slider_down = down
         if not down and not self._crop_editing:
-            self._renderer.request(interactive=False)
+            self._request_render(interactive=False)
 
-    def _on_rendered(self, image: object, was_full: bool, scale: float) -> None:
+    def _on_rendered(
+        self, image: object, was_full: bool, scale: float, metadata: object = None
+    ) -> None:
         """A processed image arrived: display it (ignored while cropping).
 
         ``scale`` (1.0 full-res, <1 for an interactive preview) is passed through
         so a downscaled preview is shown at full on-screen size rather than
         shrinking to its pixel dimensions.
         """
+        # A full-resolution frame means the renderer has caught up; clear busy.
+        if was_full:
+            self._busy_label.clear()
+        # Feed the palette dock from the frame's side-channel metadata: present
+        # while the Colour groups control is active, absent (-> clear) otherwise.
+        palette = metadata.get("palette") if isinstance(metadata, dict) else None
+        if palette:
+            self._palette_panel.set_colours(palette)
+        else:
+            self._palette_panel.clear()
         if self._crop_editing:
             return
         # Remember the processed frame so the before/after toggle can restore it
@@ -398,6 +736,9 @@ class MainWindow(QMainWindow):
                 self._crop_editor.set_editing(False)
             return
 
+        # Crop editing owns the mouse; disarm the eyedropper first.
+        self._eyedropper_action.setChecked(False)
+
         # Cropping only matters when the control is enabled; turn it on and
         # reflect that in the dock checkbox.
         self._pipeline.set_enabled("crop", True)
@@ -418,7 +759,7 @@ class MainWindow(QMainWindow):
             self._crop_editor.set_editing(False)
         if render:
             self._fit_next = True
-            self._renderer.request(interactive=False)
+            self._request_render(interactive=False)
 
     def _on_crop_rect_changed(self, rx: float, ry: float, rw: float, rh: float) -> None:
         """The overlay moved/resized: store the normalised rect on the control."""
@@ -490,6 +831,14 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Showing original (release B to restore).")
                 event.accept()
                 return
+        if (
+            event.key() == Qt.Key_V
+            and not event.isAutoRepeat()
+            and not self._crop_editing
+        ):
+            self._toggle_values()
+            event.accept()
+            return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
@@ -513,12 +862,12 @@ class MainWindow(QMainWindow):
     # Session persistence (QSettings)
     # ------------------------------------------------------------------ #
     def _restore_session(self) -> None:
-        """Restore window geometry/state and the control session from QSettings.
+        """Restore window geometry/state, the control session, and the last image.
 
-        The image file itself is deliberately NOT auto-reloaded: only the control
-        knob states are restored, and a status hint is shown if the last image is
-        still on disk. This keeps startup safe (no surprise file I/O) while
-        preserving the painter's tuning between runs.
+        The saved control knob states are applied first, then the last image (if it
+        still exists on disk) is reloaded so the painter resumes exactly where they
+        left off. The reload is guarded: a missing or unreadable file degrades to a
+        status hint rather than blocking startup.
         """
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
 
@@ -541,12 +890,34 @@ class MainWindow(QMainWindow):
                     if isinstance(control_state, dict):
                         control.load_state(control_state)
                 self._panel.refresh_all()
+        # The restored blur mode determines Export availability.
+        self._update_export_enabled()
+
+        self._recent = prune_recent(self._load_recent())
 
         last_path = settings.value("session/last_image")
         if last_path and os.path.exists(last_path):
-            self.statusBar().showMessage(
-                "Last image was {} — open it to resume.".format(last_path), 6000
-            )
+            # Reloading emits image_loaded -> _on_image_loaded, which renders with
+            # the just-restored control states applied and records the recent entry.
+            try:
+                self._model.load_path(last_path)
+            except Exception:  # pragma: no cover - GUI/IO error path
+                self.statusBar().showMessage(
+                    "Couldn't reload last image: {}".format(last_path), 6000
+                )
+
+    @staticmethod
+    def _load_recent() -> list:
+        """Read the persisted recent-files list from QSettings (JSON array)."""
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        raw = settings.value("session/recent")
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
 
     def _save_session(self) -> None:
         """Persist window geometry/state and the control session to QSettings.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -21,16 +21,66 @@ _COLORS = {
 }
 
 
+def draw_grid(
+    img: np.ndarray,
+    columns: int,
+    rows: int,
+    color_rgb: Tuple[int, int, int],
+    opacity: float,
+    thickness: int,
+    diagonals: bool,
+) -> np.ndarray:
+    """Return a new RGB uint8 HxWx3 array with grid lines drawn over ``img``.
+
+    Non-mutating: ``img`` is never modified. ``columns``/``rows`` are the number
+    of even divisions, ``color_rgb`` an RGB triple, ``opacity`` a 0..1 blend
+    factor, ``thickness`` a line width in pixels (scaled to the image's short
+    side), and ``diagonals`` toggles the corner-to-corner centre-finding lines.
+    Kept as a free function so the pixel-drawing routine can be shared by an
+    export path independently of the (now non-destructive) control.
+    """
+    h, w = img.shape[:2]
+    if h < 2 or w < 2:
+        return img
+
+    cols = max(1, int(columns))
+    rows = max(1, int(rows))
+    color = tuple(int(c) for c in color_rgb)
+    opacity = max(0.0, min(1.0, float(opacity)))
+    # Scale line width to the image so it reads at any resolution.
+    short_side = min(h, w)
+    line_w = max(1, int(round(int(thickness) * short_side / 1000.0)))
+
+    overlay = img.copy()  # draw on a copy; never mutate the input
+    for i in range(1, cols):
+        x = int(round(i * w / cols))
+        cv2.line(overlay, (x, 0), (x, h), color, line_w, cv2.LINE_AA)
+    for j in range(1, rows):
+        y = int(round(j * h / rows))
+        cv2.line(overlay, (0, y), (w, y), color, line_w, cv2.LINE_AA)
+    if bool(diagonals):
+        cv2.line(overlay, (0, 0), (w - 1, h - 1), color, line_w, cv2.LINE_AA)
+        cv2.line(overlay, (w - 1, 0), (0, h - 1), color, line_w, cv2.LINE_AA)
+
+    if opacity >= 1.0:
+        return overlay
+    return cv2.addWeighted(overlay, opacity, img, 1.0 - opacity, 0.0)
+
+
 @register
 class GridControl(Control):
     """A positioning grid drawn over the reference (the painter's "grid method").
 
     Divides the image into an even ``columns`` × ``rows`` lattice so you can
-    transfer proportions and placement to a matching grid on your canvas. Drawn
-    last in the pipeline (on top of crop + blur), so the grid lines stay crisp
-    over a blurred block-in and divide the *cropped* region — exactly the cells
-    you'd rule onto your surface. It is non-destructive (the original is kept)
-    and is included when you Save, so you can print a gridded reference.
+    transfer proportions and placement to a matching grid on your canvas.
+
+    The grid is a non-destructive *viewer overlay*: it is not baked into the
+    processed pixels. :meth:`process` is the identity and :meth:`is_active`
+    always returns ``False`` so the pipeline treats the control as a no-op (and
+    its params never churn the render cache). The control is retained only to
+    own the params (for the control panel UI and session persistence); the view
+    reads :meth:`overlay_spec` to draw the lines over the pixmap, and any export
+    path can call the module-level :func:`draw_grid` to bake them if needed.
     """
 
     id = "grid"
@@ -75,43 +125,36 @@ class GridControl(Control):
         ]
 
     def is_active(self) -> bool:
-        """Active only when enabled AND something would actually be drawn."""
-        if not self.enabled:
-            return False
-        return (
-            int(self.get("columns")) > 1
-            or int(self.get("rows")) > 1
-            or bool(self.get("diagonals"))
-        )
+        """Always ``False``: the grid is a viewer overlay, never a pixel change.
+
+        Returning ``False`` unconditionally makes the pipeline skip this control
+        entirely, so its params never invalidate the render cache. Whether the
+        overlay actually shows anything is decided by the view from
+        :meth:`overlay_spec`.
+        """
+        return False
 
     def process(self, img: np.ndarray) -> np.ndarray:
-        """RGB uint8 HxWx3 -> the image with grid lines drawn over it (new array)."""
-        h, w = img.shape[:2]
-        if h < 2 or w < 2:
-            return img
+        """Identity: the grid is drawn by the viewer, not baked into pixels."""
+        return img
 
+    def overlay_spec(self) -> Dict[str, Any]:
+        """Return the resolved overlay parameters for the viewer to draw.
+
+        Resolves the colour preset to an actual RGB triple and normalises
+        opacity to 0..1. ``visible`` reports whether the enabled control would
+        draw anything (more than one division, or diagonals on); the view can
+        use it to decide whether to show the overlay at all.
+        """
         cols = max(1, int(self.get("columns")))
         rows = max(1, int(self.get("rows")))
-        color = _COLORS.get(str(self.get("color")), _COLORS["red"])
-        opacity = max(0.0, min(1.0, int(self.get("opacity")) / 100.0))
-        # Scale line width to the image so it reads at any resolution.
-        short_side = min(h, w)
-        thickness = max(1, int(round(int(self.get("thickness")) * short_side / 1000.0)))
-
-        overlay = np.ascontiguousarray(img)  # copy we may draw on
-        if overlay is img:
-            overlay = img.copy()
-
-        for i in range(1, cols):
-            x = int(round(i * w / cols))
-            cv2.line(overlay, (x, 0), (x, h), color, thickness, cv2.LINE_AA)
-        for j in range(1, rows):
-            y = int(round(j * h / rows))
-            cv2.line(overlay, (0, y), (w, y), color, thickness, cv2.LINE_AA)
-        if bool(self.get("diagonals")):
-            cv2.line(overlay, (0, 0), (w - 1, h - 1), color, thickness, cv2.LINE_AA)
-            cv2.line(overlay, (w - 1, 0), (0, h - 1), color, thickness, cv2.LINE_AA)
-
-        if opacity >= 1.0:
-            return overlay
-        return cv2.addWeighted(overlay, opacity, img, 1.0 - opacity, 0.0)
+        diagonals = bool(self.get("diagonals"))
+        return {
+            "columns": cols,
+            "rows": rows,
+            "color_rgb": _COLORS.get(str(self.get("color")), _COLORS["red"]),
+            "opacity": max(0.0, min(1.0, int(self.get("opacity")) / 100.0)),
+            "thickness": max(1, int(self.get("thickness"))),
+            "diagonals": diagonals,
+            "visible": self.enabled and (cols > 1 or rows > 1 or diagonals),
+        }

@@ -46,14 +46,16 @@ _log = logging.getLogger(__name__)
 class _TaskSignals(QObject):
     """Signal holder for a :class:`_RenderTask` (a QRunnable cannot have signals).
 
-    ``done`` carries ``(image, generation, was_full, scale)`` and is connected
-    with a :data:`Qt.QueuedConnection` so the result is marshalled back onto the
-    GUI thread regardless of which worker thread emits it. ``image`` is ``None``
-    when the render raised, so the controller can clear its busy flag without
-    displaying anything.
+    ``done`` carries ``(image, generation, was_full, scale, metadata)`` and is
+    connected with a :data:`Qt.QueuedConnection` so the result is marshalled back
+    onto the GUI thread regardless of which worker thread emits it. ``image`` is
+    ``None`` when the render raised, so the controller can clear its busy flag
+    without displaying anything. ``metadata`` is the pipeline's side-channel dict
+    (e.g. the quantize palette), or ``None`` on failure.
     """
 
-    done = Signal(object, int, bool, float)  # (image|None, generation, was_full, scale)
+    # (image|None, generation, was_full, scale, metadata|None)
+    done = Signal(object, int, bool, float, object)
 
 
 class _RenderTask(QRunnable):
@@ -91,15 +93,20 @@ class _RenderTask(QRunnable):
         """
         src = self._source
         was_full = self._scale >= 1.0
+        metadata: dict = {}
         try:
             if not was_full and src is not None:
                 src = self._downscale(src, self._scale)
-            out = self._pipeline.process(src, self._states, self._token)
+            out = self._pipeline.process(
+                src, self._states, self._token, metadata_out=metadata
+            )
         except Exception:
             _log.exception("Render task failed (generation %d)", self._generation)
-            self._signals.done.emit(None, self._generation, was_full, self._scale)
+            self._signals.done.emit(None, self._generation, was_full, self._scale, None)
             return
-        self._signals.done.emit(out, self._generation, was_full, self._scale)
+        self._signals.done.emit(
+            out, self._generation, was_full, self._scale, metadata
+        )
 
     @staticmethod
     def _downscale(src: np.ndarray, scale: float) -> np.ndarray:
@@ -123,11 +130,12 @@ class RenderController(QObject):
     :meth:`request`.
     """
 
-    # (image: np.ndarray RGB, was_full_res: bool, scale: float)
+    # (image: np.ndarray RGB, was_full_res: bool, scale: float, metadata: dict)
     # ``scale`` is the factor the emitted image was rendered at (1.0 full-res,
     # PREVIEW_SCALE for an interactive preview) so the view can display a
-    # downscaled preview at full on-screen size.
-    rendered = Signal(object, bool, float)
+    # downscaled preview at full on-screen size. ``metadata`` carries any
+    # control side-channel outputs for this frame (e.g. the quantize palette).
+    rendered = Signal(object, bool, float, object)
 
     PREVIEW_SCALE = 0.4
     # Interactive (dragging) frames debounce briefly for snappy feedback; the
@@ -236,7 +244,12 @@ class RenderController(QObject):
         return self._source_token
 
     def _on_task_done(
-        self, image: object, generation: int, was_full: bool, scale: float
+        self,
+        image: object,
+        generation: int,
+        was_full: bool,
+        scale: float,
+        metadata: object,
     ) -> None:
         """GUI thread (QueuedConnection): emit fresh results, drop stale/failed ones."""
         self._busy = False
@@ -244,7 +257,7 @@ class RenderController(QObject):
             return
         # image is None when the render raised; clear busy but display nothing.
         if image is not None and generation == self._generation:
-            self.rendered.emit(image, was_full, scale)
+            self.rendered.emit(image, was_full, scale, metadata)
         # If requests arrived while busy, dispatch the freshest snapshot now.
         if self._pending:
             self._pending = False

@@ -145,6 +145,16 @@ class ColourGroupsControl(Control):
         quant_lab = centers[labels.flatten()].reshape(sh, sw, 3)
         quant_rgb = cv2.cvtColor(quant_lab, cv2.COLOR_Lab2RGB)
 
+        # Surface the cluster centroids as a palette for the side panel. Sort by
+        # Lab lightness (ascending) so the strip reads dark -> light, and convert
+        # each centroid from its Lab representation back to display RGB.
+        order = np.argsort(centers[:, 0], kind="stable")
+        palette_lab = centers[order].reshape(-1, 1, 3)
+        palette_rgb = cv2.cvtColor(palette_lab, cv2.COLOR_Lab2RGB).reshape(-1, 3)
+        self.emit_metadata(
+            "palette", [tuple(int(c) for c in px) for px in palette_rgb]
+        )
+
         # Upscale the flat masses back to full size (nearest = exact for flats).
         if (sh, sw) != (h, w):
             quant_rgb = cv2.resize(quant_rgb, (w, h), interpolation=cv2.INTER_NEAREST)
