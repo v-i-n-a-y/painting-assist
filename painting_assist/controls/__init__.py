@@ -18,10 +18,12 @@ No other file needs to change.
 from __future__ import annotations
 
 from . import crop  # noqa: F401  -- registers CropControl
+from . import white_balance  # noqa: F401  -- registers WhiteBalanceControl
 from . import adjust  # noqa: F401  -- registers ToneControl
 from . import blur  # noqa: F401  -- registers BlurControl
 from . import quantize  # noqa: F401  -- registers ColourGroupsControl
 from . import values  # noqa: F401  -- registers ValuesControl
+from . import temperature  # noqa: F401  -- registers TemperatureMapControl
 from . import grid  # noqa: F401  -- registers GridControl
 from . import flip  # noqa: F401  -- registers FlipControl
 # add one import line here per new control

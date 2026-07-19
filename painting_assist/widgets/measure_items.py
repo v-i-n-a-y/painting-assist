@@ -157,6 +157,23 @@ class _MeasureItem(QGraphicsObject):
                 best_id = hid
         return best_id
 
+    # -- hover / cursor affordance ----------------------------------------- #
+    def hoverMoveEvent(self, event) -> None:
+        """Show a grab cursor over a draggable handle, a crosshair otherwise."""
+        self.setCursor(self._cursor_for_handle(self._handle_at(event.pos())))
+        super().hoverMoveEvent(event)
+
+    def _cursor_for_handle(self, hid: Optional[str]) -> Qt.CursorShape:
+        """Return the cursor for hovering handle ``hid`` (field when ``None``).
+
+        Point handles drag freely in any direction, so they use the move-all
+        cursor; the open measuring field uses a crosshair to signal precise
+        placement. Axis-locked tools override this (see :class:`GuidesItem`).
+        """
+        if hid is None:
+            return Qt.CrossCursor
+        return Qt.SizeAllCursor
+
     # -- mouse ------------------------------------------------------------- #
     def mousePressEvent(self, event) -> None:
         self._drag = self._handle_at(event.pos())
@@ -372,6 +389,14 @@ class GuidesItem(_MeasureItem):
         if d_horizon <= tol:
             return "horizon"
         return None
+
+    def _cursor_for_handle(self, hid: Optional[str]) -> Qt.CursorShape:
+        # The plumb line slides left/right; the horizon slides up/down.
+        if hid == "plumb":
+            return Qt.SizeHorCursor
+        if hid == "horizon":
+            return Qt.SizeVerCursor
+        return Qt.CrossCursor
 
     def _move_handle(self, hid: str, pos: QPointF) -> None:
         if hid == "plumb":

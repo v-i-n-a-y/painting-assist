@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import List, Optional
 
 import cv2
@@ -13,7 +14,7 @@ from painting_assist.controls.registry import register
 
 @register
 class BlurControl(Control):
-    """Gaussian blur — the coarse-to-fine "blocking" control.
+    """The coarse-to-fine "blocking" blur control.
 
     Two modes share one blur engine:
 
@@ -126,7 +127,13 @@ class BlurControl(Control):
         return [int(round(v)) for v in np.linspace(top, 0, n)]
 
     def _parse_manual(self) -> List[int]:
-        """Parse ``manual_values`` ("80, 55, 35") into a list of ints (lenient)."""
+        """Parse ``manual_values`` ("80, 55, 35") into a list of ints (lenient).
+
+        Blanks and unparseable chunks are skipped. Non-finite entries are also
+        skipped: a typed "1e999" parses to ``inf`` (no ``ValueError``) and would
+        otherwise raise ``OverflowError`` at ``int(round(...))``, so the manual
+        ladder can never blow up downstream.
+        """
         raw = str(self.get("manual_values") or "")
         out: List[int] = []
         for chunk in raw.replace(";", ",").split(","):
@@ -134,9 +141,12 @@ class BlurControl(Control):
             if not chunk:
                 continue
             try:
-                out.append(int(round(float(chunk))))
-            except ValueError:
+                value = float(chunk)
+            except (ValueError, OverflowError):
                 continue
+            if not math.isfinite(value):
+                continue
+            out.append(int(round(value)))
         return out
 
     def current_stage(self) -> int:
@@ -158,12 +168,19 @@ class BlurControl(Control):
         return self.enabled and self.effective_radius() > 0
 
     def process(self, img: np.ndarray) -> np.ndarray:
-        """RGB uint8 HxWx3 -> Gaussian-blurred RGB uint8 HxWx3 (new array).
+        """RGB uint8 HxWx3 -> blurred RGB uint8 HxWx3 (new array).
 
         Does not mutate ``img``: returns it unchanged when there is nothing to
-        do; otherwise ``cv2.GaussianBlur`` allocates a fresh array. The abstract
-        0..100 radius is scaled by the image's smaller side so the effect is
-        comparable across resolutions, then converted to an odd kernel size.
+        do; otherwise the blur allocates a fresh array. The abstract 0..100
+        radius is scaled by the image's smaller side so the effect is comparable
+        across resolutions, then converted to an odd kernel size.
+
+        Uses ``cv2.stackBlur`` where available: its cost is independent of the
+        radius, so it stays fast (tens of ms) even on very large references,
+        where an equivalent ``cv2.GaussianBlur`` runs for many seconds. On
+        OpenCV older than 4.7 (no ``stackBlur``) it falls back to
+        ``cv2.GaussianBlur``. Both collapse detail into masses
+        indistinguishably at these radii.
         """
         r = self.effective_radius()
         if r <= 0:
@@ -177,9 +194,13 @@ class BlurControl(Control):
         # r == 100 corresponds to ~12.5% of the smaller dimension.
         pixel_radius = int(round((r / 100.0) * 0.125 * short_side))
         if pixel_radius <= 0:
-            return img
+            return img  # sub-pixel kernel (k would be 1): identity, skip the blur
 
-        k = 2 * pixel_radius + 1  # GaussianBlur needs an odd kernel
+        k = 2 * pixel_radius + 1  # odd and >= 3 (stackBlur requires an odd ksize)
+
+        stack_blur = getattr(cv2, "stackBlur", None)
+        if stack_blur is not None:
+            return stack_blur(img, (k, k))
         return cv2.GaussianBlur(img, (k, k), 0)
 
     def create_editor(self, parent: Optional[object] = None):

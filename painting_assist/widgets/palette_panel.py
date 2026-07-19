@@ -89,18 +89,35 @@ def format_readout(rgb: Sequence[int]) -> str:
     )
 
 
+def _luma(rgb: Sequence[int]) -> float:
+    """Rec. 601 relative luminance of an (r, g, b) triple (0..255)."""
+    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+
+
+# Swatch border colour for the exported strip, matching the on-screen swatch
+# border (#808080) so a saved strip reads the same as the panel: near-black
+# swatches stay delineated instead of merging into each other or a dark viewer.
+_STRIP_BORDER: RGB = (0x80, 0x80, 0x80)
+
+
 def render_palette_strip(
-    colours: Sequence[Sequence[int]], swatch: int = 64, height: int = 64
+    colours: Sequence[Sequence[int]],
+    swatch: int = 64,
+    height: int = 64,
+    annotate: bool = True,
 ) -> "object":
     """Draw ``colours`` as side-by-side swatches into an RGB Pillow image.
 
     Pure Pillow/numpy so it is importable and callable without a running
     QApplication (the lead uses it to save a PNG). Each colour occupies a
-    ``swatch`` wide by ``height`` tall block; the returned image is
-    ``swatch * len(colours)`` wide. An empty palette yields a 1x``height``
-    black image so callers always get a valid image back.
+    ``swatch`` wide by ``height`` tall block framed by a 1px mid-grey border;
+    the returned image is ``swatch * len(colours)`` wide. When ``annotate`` is
+    true (and the swatches are big enough to read) each block is labelled with
+    its hex and value %, inked white or black by the swatch's luma. Annotation
+    and the border never change the image size. An empty palette yields a
+    1x``height`` black image so callers always get a valid image back.
     """
-    from PIL import Image  # local import: keep module usable without Pillow
+    from PIL import Image, ImageDraw, ImageFont  # local: keep imports cheap
 
     swatch = max(1, int(swatch))
     height = max(1, int(height))
@@ -113,7 +130,23 @@ def render_palette_strip(
     arr = np.zeros((height, swatch * len(triples), 3), dtype=np.uint8)
     for i, triple in enumerate(triples):
         arr[:, i * swatch : (i + 1) * swatch] = triple
-    return Image.fromarray(arr, mode="RGB")
+    img = Image.fromarray(arr, mode="RGB")
+
+    draw = ImageDraw.Draw(img)
+    # Only label when a swatch is wide and tall enough for the text to be
+    # legible; smaller strips just get the border (and keep pure-colour cores).
+    can_annotate = annotate and swatch >= 48 and height >= 26
+    font = ImageFont.load_default() if can_annotate else None
+    for i, triple in enumerate(triples):
+        x0 = i * swatch
+        x1 = x0 + swatch - 1
+        draw.rectangle((x0, 0, x1, height - 1), outline=_STRIP_BORDER, width=1)
+        if can_annotate:
+            ink = (255, 255, 255) if _luma(triple) < 128 else (0, 0, 0)
+            value_pct = lab_readout(rgb_to_lab(triple))["value_pct"]
+            draw.text((x0 + 3, 2), rgb_to_hex(triple), fill=ink, font=font)
+            draw.text((x0 + 3, 14), "v{:.0f}%".format(value_pct), fill=ink, font=font)
+    return img
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +171,15 @@ class _Swatch(QFrame):
         self._rgb: RGB = rgb
         self.setToolTip(rgb_to_hex(rgb))
         r, g, b = rgb
-        self.setStyleSheet("background-color: rgb({}, {}, {});".format(r, g, b))
+        # A 1px mid-grey border keeps near-black swatches visible on the dark
+        # theme base and near-white ones on the light base (the flat
+        # background-color alone lets them vanish into the panel). #808080
+        # reads on both themes and is the colour the exported strip mirrors.
+        self.setStyleSheet(
+            "background-color: rgb({}, {}, {}); border: 1px solid #808080;".format(
+                r, g, b
+            )
+        )
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.button() == Qt.LeftButton:

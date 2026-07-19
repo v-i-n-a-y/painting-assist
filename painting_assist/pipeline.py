@@ -10,6 +10,13 @@ import numpy as np
 from painting_assist.controls.base import Control
 from painting_assist.controls.registry import create_all
 
+# Peak-memory bound. The prefix cache holds one full-resolution array per active
+# stage, which over a long chain on a large image is otherwise unbounded (~1.25
+# GB on a 50 MP full chain). After each render at most this many cached arrays
+# are retained; see ControlPipeline._trim_cache for why dropping the rest is
+# safe for correctness.
+MAX_CACHED_STAGES = 4
+
 
 @dataclass
 class ControlState:
@@ -148,6 +155,7 @@ class ControlPipeline:
             self._invalidate_from(i + 1)
             current = output
 
+        self._trim_cache()
         return current
 
     # ---- internals ----
@@ -225,3 +233,24 @@ class ControlPipeline:
         """Null cache slots i..end (downstream stages stale)."""
         for j in range(i, len(self._cache)):
             self._cache[j] = None
+
+    def _trim_cache(self) -> None:
+        """Bound peak memory to at most MAX_CACHED_STAGES retained full-res arrays.
+
+        Each populated cache slot holds one full-resolution array, so a long chain
+        over a large image would otherwise pin one array per active stage. Once a
+        render has finished we null the LOWEST-index populated slots down to the
+        cap, keeping the most-downstream entries.
+
+        This never changes what a later :meth:`process` returns: a dropped upstream
+        prefix is simply recomputed from ``source`` on the next call, and any
+        surviving entry is still validated by its ``chain_key`` (which encodes the
+        upstream stage keys, not array identity) before it is reused, so it can
+        only be served when it is genuinely correct.
+        """
+        populated = [i for i, entry in enumerate(self._cache) if entry is not None]
+        excess = len(populated) - MAX_CACHED_STAGES
+        # max(0, ...): a negative count would slice from the end (populated[:-1]),
+        # nulling live upstream slots on a short chain instead of doing nothing.
+        for i in populated[: max(0, excess)]:
+            self._cache[i] = None

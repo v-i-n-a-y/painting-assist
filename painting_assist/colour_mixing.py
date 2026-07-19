@@ -6,6 +6,17 @@ These are pure, Qt-free functions intended to help a painter reason about how
 to reach a target colour by mixing a small set of base paints, and to describe
 a colour in painter's terms (value, hue, chroma, temperature, modifier).
 
+Colour description works in OpenCV's 8-bit CIELAB space, the same convention
+the Palette panel's readout uses, so the two never disagree about a colour. For
+an 8-bit Lab pixel ``(L, a, b)`` with every channel on 0-255, we take
+
+- ``value = L * 100 / 255`` (lightness on 0-100),
+- ``hue = atan2(b - 128, a - 128)`` (degrees on the ``a*``-``b*`` plane), and
+- ``chroma = hypot(a - 128, b - 128)`` (colourfulness, roughly 0-135).
+
+The hue angle starts at 0 degrees along ``+a*`` (the red/pink axis) and
+increases towards ``+b*`` (yellow), then ``-a*`` (green), then ``-b*`` (blue).
+
 Important caveat on mixing: :func:`suggest_mix` uses an approximate additive
 model in sRGB space. Real paint mixing is subtractive and non-linear, so treat
 the suggested proportions as a rough starting guide rather than a physically
@@ -13,8 +24,6 @@ accurate recipe.
 """
 
 from __future__ import annotations
-
-import colorsys
 
 import numpy as np
 
@@ -56,21 +65,43 @@ BASE_PALETTES: dict[str, dict[str, object]] = {
 # Proportions below this fraction are dropped before renormalising.
 _MIX_EPSILON = 0.03
 
-# Twelve-name hue wheel, ordered by increasing hue angle starting at red (0).
-_HUE_NAMES = [
-    "red",
-    "orange",
-    "yellow-orange",
-    "yellow",
-    "yellow-green",
-    "green",
-    "cyan",
-    "azure",
-    "blue",
-    "violet",
-    "magenta",
-    "rose",
+# Twelve-name hue wheel for CIELAB. Each name is paired with its hue angle in
+# degrees on the OpenCV-Lab a*-b* plane (0 = +a*, red/pink; increasing towards
+# +b*, yellow; then -a*, green; then -b*, blue). Lab hue is not linear in sRGB
+# hue, so these reference angles are unevenly spaced and a colour is named by
+# the nearest angle (measured around the circle), not by equal 30-degree
+# wedges. The angles are the Lab hue of the twelve canonical fully-saturated
+# sRGB hues spaced 30 degrees apart in HSV (red = (255, 0, 0),
+# orange = (255, 128, 0), ... rose = (255, 0, 128)); regenerate by converting
+# each with cv2.cvtColor(pixel, cv2.COLOR_RGB2Lab). The suite checks that these
+# still agree with OpenCV (test_hue_wheel_matches_opencv).
+_HUE_WHEEL: list[tuple[str, float]] = [
+    ("red", 39.9),
+    ("orange", 59.8),
+    ("yellow-orange", 83.1),
+    ("yellow", 103.0),
+    ("yellow-green", 128.3),
+    ("green", 136.0),
+    ("cyan", 196.3),
+    ("azure", 285.0),
+    ("blue", 306.2),
+    ("violet", 311.7),
+    ("magenta", 328.1),
+    ("rose", 2.7),
 ]
+
+# Chroma (Lab a*-b* radius) below which a colour reads as a near-neutral grey.
+_NEUTRAL_CHROMA = 10.0
+# Chroma at or above which a non-neutral colour reads as a pure, saturated hue.
+_PURE_CHROMA = 45.0
+# Value (Lab lightness, 0-100) cutoffs separating light tints from dark shades.
+_TINT_VALUE = 70.0
+_SHADE_VALUE = 35.0
+# Warm hues run the red-orange-yellow arc, wrapping through rose and magenta;
+# cool hues run green through blue to violet. The boundaries sit at the
+# midpoints between yellow-green/green and violet/magenta on the Lab wheel.
+_WARM_WRAP = 320.0  # magenta side; hues at or above this wrap round to warm
+_WARM_END = 132.0  # yellow-green side; hues at or below this are still warm
 
 
 def _as_rgb_array(rgb: tuple[int, int, int]) -> np.ndarray:
@@ -79,6 +110,22 @@ def _as_rgb_array(rgb: tuple[int, int, int]) -> np.ndarray:
     if arr.shape != (3,):
         raise ValueError("rgb must have exactly three components")
     return np.clip(arr, 0.0, 255.0)
+
+
+def _nearest_hue_name(hue_deg: float) -> str:
+    """Return the wheel name whose reference angle is closest to ``hue_deg``.
+
+    Distance is measured around the circle, so 359 and 1 degree are two apart.
+    """
+    best_name = _HUE_WHEEL[0][0]
+    best_dist = 360.0
+    for name, angle in _HUE_WHEEL:
+        diff = abs(hue_deg - angle) % 360.0
+        dist = min(diff, 360.0 - diff)
+        if dist < best_dist:
+            best_dist = dist
+            best_name = name
+    return best_name
 
 
 def _nnls(matrix: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -123,9 +170,15 @@ def _nnls(matrix: np.ndarray, target: np.ndarray) -> np.ndarray:
 
 def suggest_mix(
     target_rgb: tuple[int, int, int],
-    palette_key: str,
+    palette_key: str = "zorn",
+    bases: list[tuple[str, tuple[int, int, int]]] | None = None,
 ) -> list[tuple[str, float]]:
-    """Suggest an approximate mix of palette bases to reach ``target_rgb``.
+    """Suggest an approximate mix of bases to reach ``target_rgb``.
+
+    By default the bases come from the named built-in palette ``palette_key``
+    (see :data:`BASE_PALETTES`). Pass ``bases`` as a list of
+    ``(name, (r, g, b))`` tuples to mix against a painter's own tubes instead;
+    when ``bases`` is given ``palette_key`` is ignored.
 
     The result is a list of ``(base_name, proportion)`` tuples sorted by
     descending proportion. Proportions are non-negative and sum to roughly
@@ -137,13 +190,21 @@ def suggest_mix(
     one. If every weight is zero, it falls back to the single nearest base. This
     is an APPROXIMATE additive-RGB guide, not a physically accurate subtractive
     paint recipe, and it is deterministic.
-    """
-    if palette_key not in BASE_PALETTES:
-        raise KeyError(f"unknown palette key: {palette_key!r}")
 
-    bases = BASE_PALETTES[palette_key]["bases"]  # type: ignore[index]
-    names = [name for name, _ in bases]
-    matrix = np.array([rgb for _, rgb in bases], dtype=float).T  # 3 x n
+    Raises ``KeyError`` if ``palette_key`` is unknown (and no ``bases`` given),
+    or ``ValueError`` if ``bases`` is given but empty.
+    """
+    if bases is not None:
+        use_bases = list(bases)
+        if not use_bases:
+            raise ValueError("bases must contain at least one base colour")
+    else:
+        if palette_key not in BASE_PALETTES:
+            raise KeyError(f"unknown palette key: {palette_key!r}")
+        use_bases = BASE_PALETTES[palette_key]["bases"]  # type: ignore[assignment]
+
+    names = [name for name, _ in use_bases]
+    matrix = np.array([rgb for _, rgb in use_bases], dtype=float).T  # 3 x n
     target = _as_rgb_array(target_rgb)
 
     # Solve for a convex combination of the bases (weights non-negative and
@@ -178,58 +239,68 @@ def suggest_mix(
 
 
 def describe_colour(rgb: tuple[int, int, int]) -> dict[str, object]:
-    """Describe a colour in painter's terms.
+    """Describe a colour in painter's terms, using OpenCV 8-bit CIELAB.
 
-    Returns a dict with keys:
+    The colour is converted to OpenCV's 8-bit Lab so the numbers match the
+    Palette panel's readout exactly. Returns a dict with keys:
 
     - ``hex``: ``#rrggbb`` string.
-    - ``value``: perceptual luma on 0-100, from ``0.299r + 0.587g + 0.114b``
-      (the Rec. 601 luma weights), scaled from 0-255 to 0-100.
-    - ``hue_name``: nearest of a fixed twelve-name hue wheel.
-    - ``chroma``: HSV saturation times value, on 0-100.
-    - ``temperature``: ``"warm"``, ``"cool"`` or ``"neutral"`` (near-greys).
-    - ``modifier``: ``"tint"``, ``"tone"``, ``"shade"`` or ``"pure"`` from
-      value and chroma heuristics.
+    - ``value``: Lab lightness on 0-100, ``L * 100 / 255``.
+    - ``hue_name``: nearest of the fixed twelve-name Lab hue wheel
+      (see :data:`_HUE_WHEEL`).
+    - ``chroma``: Lab colourfulness ``hypot(a - 128, b - 128)`` (roughly 0-135,
+      near 0 for greys).
+    - ``temperature``: ``"warm"``, ``"cool"`` or ``"neutral"`` (near-greys),
+      from the Lab hue angle and a low-chroma neutral cutoff.
+    - ``modifier``: ``"tint"``, ``"tone"``, ``"shade"`` or ``"pure"`` from the
+      value and chroma.
     """
+    import cv2
+
     r, g, b = _as_rgb_array(rgb)
     hex_str = "#{:02x}{:02x}{:02x}".format(int(round(r)), int(round(g)), int(round(b)))
 
-    value = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0 * 100.0
+    # One RGB pixel through OpenCV's 8-bit Lab: L on 0-255 (encodes 0-100),
+    # a and b on 0-255 centred at 128. This mirrors how the panel samples Lab.
+    pixel = np.array([[[r, g, b]]]).round().astype(np.uint8)
+    lab_l, lab_a, lab_b = cv2.cvtColor(pixel, cv2.COLOR_RGB2Lab)[0, 0].astype(float)
 
-    h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
-    hue_deg = h * 360.0
-    chroma = s * v * 100.0
+    value = float(lab_l * 100.0 / 255.0)
+    da = lab_a - 128.0
+    db = lab_b - 128.0
+    chroma = float(np.hypot(da, db))
+    hue_deg = float(np.degrees(np.arctan2(db, da)) % 360.0)
 
-    # Nearest of twelve evenly spaced hue names (30 degrees apart).
-    idx = int(round(hue_deg / 30.0)) % len(_HUE_NAMES)
-    hue_name = _HUE_NAMES[idx]
+    hue_name = _nearest_hue_name(hue_deg)
 
-    # Temperature: warm roughly from red through yellow into yellow-green,
-    # cool otherwise; near-greys (low chroma) read as neutral.
-    if chroma < 10.0:
+    # Temperature: near-greys read neutral; otherwise warm across the
+    # red-orange-yellow arc (wrapping through rose/magenta), cool elsewhere.
+    if chroma < _NEUTRAL_CHROMA:
         temperature = "neutral"
-    elif hue_deg <= 150.0 or hue_deg >= 330.0:
+    elif hue_deg >= _WARM_WRAP or hue_deg <= _WARM_END:
         temperature = "warm"
     else:
         temperature = "cool"
 
-    # Modifier heuristics from value and chroma.
-    if chroma < 10.0:
+    # Modifier: a near-grey is a fully greyed tone; a strongly chromatic colour
+    # is a pure hue; otherwise a light colour is a tint, a dark one a shade, and
+    # a muted mid-value one a tone.
+    if chroma < _NEUTRAL_CHROMA:
         modifier = "tone"
-    elif value >= 70.0:
-        modifier = "tint"
-    elif value <= 35.0:
-        modifier = "shade"
-    elif chroma >= 55.0:
+    elif chroma >= _PURE_CHROMA:
         modifier = "pure"
+    elif value >= _TINT_VALUE:
+        modifier = "tint"
+    elif value <= _SHADE_VALUE:
+        modifier = "shade"
     else:
         modifier = "tone"
 
     return {
         "hex": hex_str,
-        "value": float(value),
+        "value": value,
         "hue_name": hue_name,
-        "chroma": float(chroma),
+        "chroma": chroma,
         "temperature": temperature,
         "modifier": modifier,
     }

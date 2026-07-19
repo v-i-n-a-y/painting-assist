@@ -125,25 +125,34 @@ class ValuesControl(Control):
         isolate = max(0, min(8, int(self.get("isolate"))))
 
         lab = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2Lab)
-        L = lab[:, :, 0].astype(np.float32)
+        L = np.ascontiguousarray(lab[:, :, 0])  # uint8 lightness, 0..255
 
         # Even bands over the full 0-255 lightness range. Interior edges feed
-        # np.digitize; band index is 0..steps-1. Both posterize and grey-mode
-        # isolation share this banding.
+        # np.digitize; band index is 0..steps-1. Because L is uint8 there are
+        # only 256 possible inputs, so the L->band map is a 256-entry lookup
+        # table, shared by posterize value-mapping and (grey- or posterize-mode)
+        # band isolation. Computing it once over the 256 levels avoids a
+        # float digitize over every pixel.
         edges = np.linspace(0.0, 255.0, steps + 1)
-        band = np.digitize(L, edges[1:-1]).astype(np.int32)  # 0..steps-1
-        band = np.clip(band, 0, steps - 1)
+        levels = np.arange(256.0)  # every possible L value
+        band_lut = np.clip(np.digitize(levels, edges[1:-1]), 0, steps - 1).astype(
+            np.int32
+        )  # 256 entries: band index per L value
 
         if mode == "posterize":
-            # Map each band to the mean L of its members (deterministic);
-            # empty bands fall back to their geometric centre.
+            # Map each band to the mean L of its members (deterministic); empty
+            # bands fall back to their geometric centre. The per-band sum/count
+            # come from grouping the 256-bin L histogram by band, so no
+            # full-image float pass is needed.
             centres = (edges[:-1] + edges[1:]) * 0.5
-            sums = np.bincount(band.ravel(), weights=L.ravel(), minlength=steps)
-            counts = np.bincount(band.ravel(), minlength=steps)
-            means = np.where(counts > 0, sums / np.maximum(counts, 1), centres)
-            new_L = means[band]
+            hist = np.bincount(L.reshape(-1), minlength=256).astype(np.float64)
+            sums = np.bincount(band_lut, weights=hist * levels, minlength=steps)
+            counts = np.bincount(band_lut, weights=hist, minlength=steps)
+            means = np.where(counts > 0, sums / np.maximum(counts, 1.0), centres)
+            # L->new_L collapses to a 256-entry uint8 LUT applied with cv2.LUT.
+            new_L_lut = np.clip(np.round(means[band_lut]), 0, 255).astype(np.uint8)
             out_lab = lab.copy()
-            out_lab[:, :, 0] = np.clip(np.round(new_L), 0, 255).astype(np.uint8)
+            out_lab[:, :, 0] = cv2.LUT(L, new_L_lut)
             if not keep_colour:
                 out_lab[:, :, 1] = self.NEUTRAL
                 out_lab[:, :, 2] = self.NEUTRAL
@@ -156,14 +165,15 @@ class ValuesControl(Control):
 
         if isolate > 0:
             # Keep the chosen band (clamped to what's available), dim the rest
-            # by blending 75% toward flat mid-grey so the band pops.
+            # by blending 75% toward flat mid-grey so the band pops. Band
+            # membership per pixel comes from the same L->band LUT, and the dim
+            # is one saturating pass (cv2.addWeighted) rather than several
+            # full-image float temporaries.
             keep_idx = min(isolate, steps) - 1
-            mask = band == keep_idx
+            keep_lut = (band_lut == keep_idx).astype(np.uint8)  # 256-entry 0/1
+            mask = cv2.LUT(L, keep_lut).astype(bool)
             grey = np.full_like(out, self.NEUTRAL)
-            dimmed = np.round(
-                0.25 * out.astype(np.float32) + 0.75 * grey.astype(np.float32)
-            )
-            dimmed = dimmed.astype(np.uint8)
+            dimmed = cv2.addWeighted(out, 0.25, grey, 0.75, 0.0)
             out = np.where(mask[:, :, None], out, dimmed)
 
         return np.ascontiguousarray(out)

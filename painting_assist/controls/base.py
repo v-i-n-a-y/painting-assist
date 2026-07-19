@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -69,9 +70,16 @@ class Param:
 
         if self.ptype is ParamType.INT:
             try:
-                coerced = int(round(float(value)))
+                as_float = float(value)
             except (TypeError, ValueError):
                 return self.default
+            if not math.isfinite(as_float):
+                # inf/-inf raise OverflowError and NaN raises ValueError in
+                # int(round(...)); a non-finite value (e.g. json.loads("1e999")
+                # -> inf on session restore) has no sensible clamp, so bail to
+                # the default before rounding rather than crashing the caller.
+                return self.default
+            coerced = int(round(as_float))
             if self.minimum is not None:
                 coerced = max(int(self.minimum), coerced)
             if self.maximum is not None:
@@ -83,8 +91,8 @@ class Param:
                 coerced = float(value)
             except (TypeError, ValueError):
                 return self.default
-            if coerced != coerced:  # NaN: min/max comparisons are all False,
-                return self.default  # which would silently pin to the bound.
+            if not math.isfinite(coerced):  # NaN pins to a bound (all comparisons
+                return self.default  # False), inf has no finite clamp; reject both.
             if self.minimum is not None:
                 coerced = max(float(self.minimum), coerced)
             if self.maximum is not None:
@@ -105,6 +113,7 @@ class Control:
     id: str = ""  # stable unique registry key, e.g. "blur" (used in saved state)
     name: str = "Control"  # display name = panel section title, e.g. "Blur"
     order: int = 100  # pipeline + panel ordering; lower runs first
+    description: str = ""  # one-line help shown by the panel; default empty
 
     def __init__(self) -> None:
         self._values: Dict[str, Any] = {p.name: p.default for p in self.params()}

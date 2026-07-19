@@ -11,6 +11,7 @@ from PySide6.QtGui import (
     QCursor,
     QPainter,
     QPainterPath,
+    QPalette,
     QPen,
     QPixmap,
     QPolygonF,
@@ -39,16 +40,20 @@ def _eyedropper_cursor() -> QCursor:
     """Return a cached eyedropper-shaped cursor (built once, lazily).
 
     Draws a classic dropper — an angled body ending in a bulb at the top-right
-    and a fine tip at the bottom-left — as a 24x24 transparent pixmap, white
-    filled with a black outline so it reads against any image. The hotspot is
-    the dropper tip (bottom-left), where the sample is taken.
+    and a fine tip at the bottom-left — over a 24x24 logical area, white filled
+    with a black outline so it reads against any image. The pixmap is rendered at
+    a 2x device pixel ratio so the antialiased edges stay crisp on HiDPI screens
+    instead of looking soft. The hotspot is the dropper tip (bottom-left), where
+    the sample is taken.
     """
     global _EYEDROPPER_CURSOR
     if _EYEDROPPER_CURSOR is not None:
         return _EYEDROPPER_CURSOR
 
     size = 24
-    pixmap = QPixmap(size, size)
+    ratio = 2.0  # render at 2x; drawing stays in logical 24x24 coordinates
+    pixmap = QPixmap(int(size * ratio), int(size * ratio))
+    pixmap.setDevicePixelRatio(ratio)
     pixmap.fill(Qt.transparent)
 
     painter = QPainter(pixmap)
@@ -141,12 +146,32 @@ class GridOverlayItem(QGraphicsItem):
         rect = self._rect
         cols = max(1, int(spec.get("columns", 1)))
         rows = max(1, int(spec.get("rows", 1)))
-        for i in range(1, cols):
-            x = rect.left() + rect.width() * i / cols
+        # Explicit layout fractions when supplied; otherwise fall back to an even
+        # columns x rows lattice (keeps older/plain specs working).
+        x_fractions = spec.get("x_fractions")
+        if x_fractions is None:
+            x_fractions = [i / cols for i in range(1, cols)]
+        y_fractions = spec.get("y_fractions")
+        if y_fractions is None:
+            y_fractions = [j / rows for j in range(1, rows)]
+        for fx in x_fractions:
+            x = rect.left() + rect.width() * float(fx)
             painter.drawLine(QLineF(x, rect.top(), x, rect.bottom()))
-        for j in range(1, rows):
-            y = rect.top() + rect.height() * j / rows
+        for fy in y_fractions:
+            y = rect.top() + rect.height() * float(fy)
             painter.drawLine(QLineF(rect.left(), y, rect.right(), y))
+        # Layout-provided diagonal segments (e.g. the armature), as fraction pairs.
+        for seg in spec.get("diagonal_lines") or ():
+            (fx0, fy0), (fx1, fy1) = seg
+            p0 = QPointF(
+                rect.left() + rect.width() * float(fx0),
+                rect.top() + rect.height() * float(fy0),
+            )
+            p1 = QPointF(
+                rect.left() + rect.width() * float(fx1),
+                rect.top() + rect.height() * float(fy1),
+            )
+            painter.drawLine(QLineF(p0, p1))
         if bool(spec.get("diagonals", False)):
             painter.drawLine(QLineF(rect.topLeft(), rect.bottomRight()))
             painter.drawLine(QLineF(rect.topRight(), rect.bottomLeft()))
@@ -177,6 +202,11 @@ class ImageView(QGraphicsView):
     # Emitted by the active measure tool: a human-readable readout string (an
     # angle, a length ratio, or guide positions) for the status bar.
     measureChanged = Signal(str)
+
+    # Emitted after any zoom change (wheel, fit-to-window, reset) with the new
+    # view scale factor from ``current_scale`` (1.0 == 100%), so the window can
+    # show a live zoom percentage.
+    zoomChanged = Signal(float)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         """Create the scene + single pixmap item and configure interaction modes."""
@@ -212,8 +242,20 @@ class ImageView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
+        # Take keyboard focus so the window's B/V/F shortcuts keep working after
+        # a click lands in a side dock; focus is claimed when the first image
+        # loads (see set_image), not on construction.
+        self.setFocusPolicy(Qt.StrongFocus)
+
         # Whether an image has ever been shown (first image always fits).
         self._has_image = False
+
+        # Centred placeholder shown over the blank viewport before any image is
+        # loaded; the window may override the copy via set_placeholder.
+        self._placeholder_lines: list[str] = [
+            "Open an image (Ctrl+O)",
+            "or drag one here",
+        ]
 
     def set_image(
         self,
@@ -254,6 +296,10 @@ class ImageView(QGraphicsView):
 
         if first_image or not preserve_view:
             self.fit_to_window()
+            # Claim keyboard focus on an explicit load so the window's key
+            # shortcuts route to the viewport; not on preserve-view re-renders,
+            # which must not steal focus back from the control panels.
+            self.setFocus()
 
     def set_grid_overlay(self, spec: Optional[Dict[str, Any]]) -> None:
         """Show/update the non-destructive grid overlay, or hide it (``None``).
@@ -263,15 +309,27 @@ class ImageView(QGraphicsView):
         """
         self._grid_item.set_spec(spec)
 
+    def set_placeholder(self, lines: list[str]) -> None:
+        """Set the centred empty-state copy shown before any image is loaded.
+
+        Each string is one centred line. The overlay is only painted while no
+        image has been shown; once an image loads it never reappears.
+        """
+        self._placeholder_lines = list(lines)
+        if not self._has_image:
+            self.viewport().update()
+
     def fit_to_window(self) -> None:
         """Scale the view so the whole image is visible, preserving aspect ratio."""
         if self._item.pixmap().isNull():
             return
         self.fitInView(self._item, Qt.KeepAspectRatio)
+        self.zoomChanged.emit(self.current_scale())
 
     def reset_zoom(self) -> None:
         """Reset the view transform to 1:1 (one image pixel per screen pixel)."""
         self.resetTransform()
+        self.zoomChanged.emit(self.current_scale())
 
     def current_scale(self) -> float:
         """Return the current horizontal scale factor of the view transform."""
@@ -460,4 +518,34 @@ class ImageView(QGraphicsView):
 
         if factor != 1.0:
             self.scale(factor, factor)
+            self.zoomChanged.emit(self.current_scale())
         event.accept()
+
+    # ------------------------------------------------------------------ #
+    # Empty-state placeholder
+    # ------------------------------------------------------------------ #
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        """Paint centred placeholder copy over the blank viewport (no image yet).
+
+        Drawn in device (viewport) coordinates with the theme's placeholder-text
+        palette colour so it stays legible in light and dark themes, and only
+        while ``_has_image`` is false — the first loaded image hides it for good.
+        """
+        super().drawForeground(painter, rect)
+        if self._has_image or not self._placeholder_lines:
+            return
+        painter.save()
+        painter.setWorldMatrixEnabled(False)  # draw in viewport (device) coords
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        font = painter.font()
+        pt = font.pointSizeF()
+        if pt > 0:
+            font.setPointSizeF(pt * 1.15)
+        painter.setFont(font)
+        painter.setPen(self.palette().color(QPalette.PlaceholderText))
+        painter.drawText(
+            QRectF(self.viewport().rect()),
+            Qt.AlignCenter,
+            "\n".join(self._placeholder_lines),
+        )
+        painter.restore()
