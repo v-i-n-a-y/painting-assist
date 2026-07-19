@@ -252,8 +252,20 @@ class PalettePanel(QWidget):
         self._sample_swatch.setFixedWidth(SWATCH_HEIGHT)
         self._sample_swatch.clicked.connect(self._on_swatch_clicked)
         sample_layout.addWidget(self._sample_swatch)
+        # The mixed-colour swatch sits right beside the sampled one so the
+        # painter can compare the target against what the suggested recipe
+        # actually makes. Hidden until a mix is supplied via set_mix().
+        self._mix_caption = QLabel("Mixed")
+        self._mix_caption.setEnabled(False)
+        sample_layout.addWidget(self._mix_caption)
+        self._mix_swatch = _Swatch((0, 0, 0))
+        self._mix_swatch.setFixedWidth(SWATCH_HEIGHT)
+        self._mix_swatch.clicked.connect(self._on_swatch_clicked)
+        sample_layout.addWidget(self._mix_swatch)
         sample_layout.addStretch(1)
         outer.addWidget(self._sample_row)
+        self._mix_caption.setVisible(False)
+        self._mix_swatch.setVisible(False)
 
         self._sample_divider.setVisible(False)
         self._sample_row.setVisible(False)
@@ -299,6 +311,7 @@ class PalettePanel(QWidget):
             self._readout.setText("")
             self._sample_divider.setVisible(False)
             self._sample_row.setVisible(False)
+            self.set_mix(None)
             self.set_mixing(None)
             return
         triple: RGB = (int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF)
@@ -306,6 +319,21 @@ class PalettePanel(QWidget):
         self._sample_divider.setVisible(True)
         self._sample_row.setVisible(True)
         self._readout.setText(format_readout(triple))
+
+    def set_mix(self, rgb: Optional[Sequence[int]]) -> None:
+        """Show the achieved-mix swatch beside the sampled one (hide if None).
+
+        Lets the painter compare the colour they picked against the colour the
+        suggested recipe actually produces, so an off mix is visible at a glance.
+        """
+        if rgb is None:
+            self._mix_caption.setVisible(False)
+            self._mix_swatch.setVisible(False)
+            return
+        triple: RGB = (int(rgb[0]) & 0xFF, int(rgb[1]) & 0xFF, int(rgb[2]) & 0xFF)
+        self._mix_swatch.set_rgb(triple)
+        self._mix_caption.setVisible(True)
+        self._mix_swatch.setVisible(True)
 
     def set_mixing(self, text: Optional[str]) -> None:
         """Show a short multi-line mixing recipe beneath the readout (hide if None)."""

@@ -32,6 +32,29 @@ def test_catalogue_names_unique():
     assert len(names) == len(set(names))
 
 
+def test_catalogue_is_broad():
+    assert len(DEFAULT_CATALOGUE) >= 100
+
+
+def test_catalogue_includes_staples():
+    names = {name for name, _ in DEFAULT_CATALOGUE}
+    for staple in (
+        "Titanium White",
+        "Ivory Black",
+        "Ultramarine Blue",
+        "Cadmium Red",
+        "Cadmium Yellow",
+        "Yellow Ochre",
+        "Burnt Sienna",
+        "Raw Umber",
+        "Phthalo Blue",
+        "Phthalo Green",
+        "Alizarin Crimson",
+        "Viridian",
+    ):
+        assert staple in names
+
+
 def test_roundtrip_preserves_catalogue():
     restored = paints_from_json(paints_to_json(DEFAULT_CATALOGUE))
     assert restored == DEFAULT_CATALOGUE

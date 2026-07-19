@@ -9,12 +9,15 @@ maps an sRGB colour into a seven-dimensional Kubelka-Munk latent space where
 pigment mixing is *linear*: a convex combination of tube latents, mapped back to
 sRGB, is a physically-plausible mix (blue plus yellow gives green, not grey).
 
-Because mixing is linear in the latent space, finding the tube proportions that
-best reach a target is a convex non-negative least-squares problem, solved once
-per query with the Lawson-Hanson solver reused from
-:mod:`painting_assist.colour_mixing` (a sum-to-one penalty row makes the weights
-a convex combination). This is fast enough for an interactive click, and the
-"which paint should I buy" scan is just one such solve per catalogue paint.
+Mixing is linear in the latent space, but latent-space distance is not the same
+as visual distance, so a pure latent fit can pick proportions that look wrong.
+The engine therefore uses the convex latent fit (the Lawson-Hanson solver reused
+from :mod:`painting_assist.colour_mixing`, with a sum-to-one penalty row) only to
+SELECT the few most relevant tubes, then searches their proportion simplex for
+the mix whose achieved colour is perceptually closest to the target (least
+:func:`deltae`). Both steps are fast enough for an interactive click; the "which
+paint should I buy" scan ranks candidates by a cheap latent estimate and runs the
+full perceptual search only on a short shortlist.
 
 Match quality is judged with :func:`deltae`, a CIE76 distance in true CIELAB
 derived from OpenCV's 8-bit Lab so it agrees with the rest of the app's colour
@@ -49,6 +52,17 @@ _MIX_EPSILON = 0.03
 # The sum-to-one constraint is imposed as a heavily weighted extra equation
 # appended to the latent-fit system, exactly as colour_mixing.suggest_mix does.
 _SUM_PENALTY = 1000.0
+
+# The latent fit only picks which tubes matter; the proportions are then chosen
+# by a grid search over the simplex that minimises PERCEPTUAL error (deltaE of
+# the achieved colour), because latent-space distance is not the same as visual
+# distance. At most this many tubes take part in one mix, and the grid steps in
+# 1/_GRID_DIVISIONS increments (0.05), finer than a painter can practically mix.
+_MAX_COMPONENTS = 3
+_GRID_DIVISIONS = 20
+# The "which paint to buy" scan ranks all candidates cheaply, then re-mixes only
+# this many of the most promising with the full perceptual search.
+_BUY_SHORTLIST = 5
 
 # A tolerance percentage maps linearly onto this many units of Lab deltaE, so the
 # full 0-100% slider spans 0-40 deltaE. 40 is a generous upper bound: at that
@@ -99,18 +113,74 @@ def tolerance_deltae(tolerance_pct: float) -> float:
     return fraction * _TOLERANCE_DELTAE_SPAN
 
 
+def _compositions(total: int, parts: int):
+    """Yield every ``parts``-tuple of non-negative ints summing to ``total``.
+
+    These enumerate the simplex grid: dividing each by ``total`` gives weight
+    vectors that are non-negative and sum to one, including the edges (mixes that
+    use fewer than ``parts`` tubes). Deterministic order.
+    """
+    if parts == 1:
+        yield (total,)
+        return
+    for first in range(total + 1):
+        for rest in _compositions(total - first, parts - 1):
+            yield (first,) + rest
+
+
+def _latent_convex_weights(
+    latents: np.ndarray, target_latent: np.ndarray
+) -> np.ndarray | None:
+    """Convex (non-negative, sum-to-one) latent-space fit; ``None`` if degenerate."""
+    aug_matrix = np.vstack([latents, np.full((1, latents.shape[1]), _SUM_PENALTY)])
+    aug_target = np.append(target_latent, _SUM_PENALTY)
+    weights = _nnls(aug_matrix, aug_target)
+    total = weights.sum()
+    if total <= 0.0:
+        return None
+    return weights / total
+
+
+def _mixed_rgb(latents: np.ndarray, weights: np.ndarray) -> tuple[int, int, int]:
+    """Map a convex combination of tube latents back to an sRGB colour."""
+    mixed_latent = latents @ np.asarray(weights, dtype=float)
+    return _clamp_rgb(tuple(mixbox.latent_to_rgb(list(mixed_latent))))
+
+
+def _grid_best(
+    target: tuple[int, int, int], latents_sel: np.ndarray, divisions: int
+) -> np.ndarray:
+    """Return the simplex-grid weights over ``latents_sel`` with the least deltaE.
+
+    Searches every proportion combination in ``1/divisions`` steps, mixing via
+    mixbox and scoring the achieved colour against the target with :func:`deltae`,
+    so the choice minimises PERCEPTUAL error rather than latent-space distance.
+    Ties break towards the first (deterministic) grid point.
+    """
+    k = latents_sel.shape[1]
+    best_weights = None
+    best_error = float("inf")
+    for counts in _compositions(divisions, k):
+        weights = np.array(counts, dtype=float) / divisions
+        error = deltae(_mixed_rgb(latents_sel, weights), target)
+        if error < best_error:
+            best_error = error
+            best_weights = weights
+    return best_weights
+
+
 def _best_mix_mixbox(
     target: tuple[int, int, int],
     tubes: list[tuple[str, tuple[int, int, int]]],
 ) -> tuple[list[tuple[str, float]], tuple[int, int, int]]:
-    """Solve for convex tube weights in mixbox latent space toward ``target``.
+    """Find tube proportions whose mixbox mix is perceptually closest to ``target``.
 
-    Each tube and the target are mapped to their seven-dimensional latent. A
-    sum-to-one non-negative least-squares fit finds the convex combination of
-    tube latents closest to the target latent; that combination is a valid latent
-    and maps back to the achieved sRGB colour. Weights below :data:`_MIX_EPSILON`
-    are dropped and the survivors renormalised, with the mixed colour recomputed
-    from the survivors so recipe and swatch always agree.
+    The latent fit is used only to SELECT the few most relevant tubes (up to
+    :data:`_MAX_COMPONENTS`); the proportions are then chosen by a grid search
+    that minimises the deltaE of the actually-achieved colour. This fixes mixes
+    that a pure latent-distance fit gets visibly wrong. Weights below
+    :data:`_MIX_EPSILON` are dropped and the survivors renormalised, with the
+    mixed colour recomputed from them so recipe and swatch always agree.
     """
     names = [name for name, _ in tubes]
     latents = np.array(
@@ -118,16 +188,23 @@ def _best_mix_mixbox(
     ).T  # 7 x n
     target_latent = np.array(mixbox.rgb_to_latent(target), dtype=float)
 
-    aug_matrix = np.vstack([latents, np.full((1, latents.shape[1]), _SUM_PENALTY)])
-    aug_target = np.append(target_latent, _SUM_PENALTY)
-    weights = _nnls(aug_matrix, aug_target)
-
-    total = weights.sum()
-    if total <= 0.0:
+    initial = _latent_convex_weights(latents, target_latent)
+    if initial is None:
         # Degenerate fit: fall back to the single nearest tube by deltaE.
         nearest = min(range(len(tubes)), key=lambda i: deltae(target, tubes[i][1]))
         return [(names[nearest], 1.0)], _clamp_rgb(tubes[nearest][1])
-    weights = weights / total
+
+    # Select the most relevant tubes from the latent fit, then optimise their
+    # proportions perceptually. Selection order is stable for determinism.
+    k = min(_MAX_COMPONENTS, len(tubes))
+    selected = sorted(
+        sorted(range(len(tubes)), key=lambda i: initial[i], reverse=True)[:k]
+    )
+    sel_weights = _grid_best(target, latents[:, selected], _GRID_DIVISIONS)
+
+    weights = np.zeros(len(tubes))
+    for idx, tube_index in enumerate(selected):
+        weights[tube_index] = sel_weights[idx]
 
     keep = weights >= _MIX_EPSILON
     if not keep.any():
@@ -135,13 +212,29 @@ def _best_mix_mixbox(
     weights = np.where(keep, weights, 0.0)
     weights = weights / weights.sum()
 
-    mixed_latent = latents @ weights
-    mixed_rgb = _clamp_rgb(tuple(mixbox.latent_to_rgb(list(mixed_latent))))
+    mixed_rgb = _mixed_rgb(latents, weights)
     recipe = [
         (names[i], float(weights[i])) for i in range(len(names)) if weights[i] > 0.0
     ]
     recipe.sort(key=lambda item: item[1], reverse=True)
     return recipe, mixed_rgb
+
+
+def _quick_error(
+    target: tuple[int, int, int],
+    tubes: list[tuple[str, tuple[int, int, int]]],
+) -> float:
+    """Cheap deltaE estimate for a tube set via the latent fit (no grid search).
+
+    Used only to rank buy candidates before the full perceptual search runs on a
+    shortlist, so a large catalogue stays fast.
+    """
+    latents = np.array([mixbox.rgb_to_latent(rgb) for _, rgb in tubes], dtype=float).T
+    target_latent = np.array(mixbox.rgb_to_latent(target), dtype=float)
+    weights = _latent_convex_weights(latents, target_latent)
+    if weights is None:
+        return float("inf")
+    return deltae(_mixed_rgb(latents, weights), target)
 
 
 def _best_mix_additive(
@@ -216,18 +309,24 @@ def _best_paint_to_buy(
 ) -> tuple[str | None, float]:
     """Return the catalogue paint whose addition best reaches ``target``.
 
-    Every catalogue paint not already among ``tubes`` (compared by name,
-    case-insensitively) is trialled by solving :func:`best_mix` over the tubes
-    plus that one paint. The paint giving the lowest resulting error wins. Ties
-    break towards the earlier catalogue entry. Returns ``(name, error)``, or
+    Each catalogue paint not already among ``tubes`` (compared by name,
+    case-insensitively) is a candidate. Because the full perceptual search is too
+    costly to run for every catalogue paint, candidates are first ranked by the
+    cheap latent-fit estimate (:func:`_quick_error`); only the most promising
+    :data:`_BUY_SHORTLIST` are then re-mixed with the full :func:`best_mix`
+    search. The paint giving the lowest resulting error wins, ties breaking
+    towards the earlier catalogue entry. Returns ``(name, error)``, or
     ``(None, inf)`` if there is nothing new to try.
     """
     owned = {name.lower() for name, _ in tubes}
+    candidates = [(name, rgb) for name, rgb in catalogue if name.lower() not in owned]
+    if not candidates:
+        return None, float("inf")
+
+    ranked = sorted(candidates, key=lambda c: _quick_error(target, list(tubes) + [c]))
     best_name: str | None = None
     best_error = float("inf")
-    for name, rgb in catalogue:
-        if name.lower() in owned:
-            continue
+    for name, rgb in ranked[:_BUY_SHORTLIST]:
         _, _, error = best_mix(target, list(tubes) + [(name, rgb)])
         if error < best_error:
             best_error = error

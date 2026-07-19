@@ -903,7 +903,7 @@ class MainWindow(QMainWindow):
         self._apply_update_schedule(startup=False)
         # Refresh any showing mix suggestion with the new tolerance/behaviour.
         if self._last_sample_rgb is not None:
-            self._palette_panel.set_mixing(self._mix_text(self._last_sample_rgb))
+            self._update_mix_display(self._last_sample_rgb)
 
     def _on_my_paints(self) -> None:
         """Open the paint-inventory manager and persist any changes."""
@@ -914,7 +914,7 @@ class MainWindow(QMainWindow):
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         settings.setValue("settings/paints", paints.paints_to_json(self._paints))
         if self._last_sample_rgb is not None:
-            self._palette_panel.set_mixing(self._mix_text(self._last_sample_rgb))
+            self._update_mix_display(self._last_sample_rgb)
 
     # ------------------------------------------------------------------ #
     # Update checking
@@ -1129,7 +1129,7 @@ class MainWindow(QMainWindow):
             return
         self._last_sample_rgb = rgb
         self._palette_panel.set_sample(rgb)
-        self._palette_panel.set_mixing(self._mix_text(rgb))
+        self._update_mix_display(rgb)
         self.statusBar().showMessage(format_readout(rgb))
 
     def _set_grey_point(self, rgb: tuple) -> None:
@@ -1172,16 +1172,18 @@ class MainWindow(QMainWindow):
         """A palette swatch was clicked: show a mixing suggestion for it."""
         rgb = tuple(int(c) for c in rgb)
         self._last_sample_rgb = rgb
-        self._palette_panel.set_mixing(self._mix_text(rgb))
+        self._palette_panel.set_sample(rgb)
+        self._update_mix_display(rgb)
 
-    def _mix_text(self, rgb: tuple) -> str:
-        """Build a short description-and-mixing string for a colour.
+    def _update_mix_display(self, rgb: tuple) -> None:
+        """Update the palette panel's mixing text and the achieved-mix swatch.
 
-        The first line describes the colour (value, temperature, hue, modifier).
-        The second line is a mixing suggestion: from the painter's own tubes when
-        they have set any up (via mixbox pigment mixing, honouring the tolerance
-        and closest-versus-buy preference), otherwise from a built-in limited
-        palette as a rough guide.
+        The readout line describes the colour (value, temperature, hue). The
+        mixing line is a suggestion from the painter's own tubes when they have
+        set any up (mixbox pigment mixing, honouring the tolerance and
+        closest-versus-buy preference), otherwise from a built-in limited palette
+        as a rough guide. When tubes are set, the mix swatch shows the colour the
+        recipe actually produces, side by side with the sampled colour.
         """
         info = colour_mixing.describe_colour(rgb)
         head = "{value:.0f}% value · {temperature} {hue_name} · {modifier}".format(
@@ -1196,20 +1198,29 @@ class MainWindow(QMainWindow):
                 paints.DEFAULT_CATALOGUE,
             )
             if suggestion.recipe:
+                self._palette_panel.set_mix(suggestion.mixed_rgb)
                 recipe = ", ".join(
                     "{} {:.0f}%".format(name, share * 100)
                     for name, share in suggestion.recipe
                 )
-                return "{}\n{}\n{}".format(head, recipe, suggestion.message)
-            return "{}\n{}".format(head, suggestion.message)
+                self._palette_panel.set_mixing(
+                    "{}\n{}\n{}".format(head, recipe, suggestion.message)
+                )
+            else:
+                self._palette_panel.set_mix(None)
+                self._palette_panel.set_mixing(
+                    "{}\n{}".format(head, suggestion.message)
+                )
+            return
         # No tubes recorded yet: fall back to the built-in limited palette.
+        self._palette_panel.set_mix(None)
         parts = colour_mixing.suggest_mix(rgb, _MIX_PALETTE)
         label = colour_mixing.BASE_PALETTES[_MIX_PALETTE]["label"]
         recipe = ", ".join(
             "{} {:.0f}%".format(name, share * 100) for name, share in parts
         )
-        return "{}\n{}: {}  (set up My Paints for your tubes)".format(
-            head, label, recipe
+        self._palette_panel.set_mixing(
+            "{}\n{}: {}  (set up My Paints for your tubes)".format(head, label, recipe)
         )
 
     # ------------------------------------------------------------------ #
