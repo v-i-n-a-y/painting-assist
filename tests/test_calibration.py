@@ -109,3 +109,16 @@ def test_edge_label_in_pixels_without_canvas():
     cal = Calibration()  # pixel-only
     label = cal.edge_label(40, 30, 0, 0, 400, 300, 400, 300)
     assert label == "L 40 px · T 30 px"
+
+
+# ---- calibration: gridline positions (fraction of canvas) ----
+def test_fraction_str_positions():
+    cal = Calibration(40, 30, "cm", display_unit="cm")
+    assert cal.fraction_str(0.25, "x") == "10.0 cm"  # 0.25 * 40
+    assert cal.fraction_str(1.0 / 3.0, "y") == "10.0 cm"  # (1/3) * 30
+
+
+def test_fraction_str_empty_without_physical_canvas():
+    # No canvas at all, and px display unit, both yield no canvas position.
+    assert Calibration().fraction_str(0.5, "x") == ""
+    assert Calibration(40, 30, "cm", display_unit="px").fraction_str(0.5, "x") == ""

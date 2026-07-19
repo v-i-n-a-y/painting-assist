@@ -120,6 +120,31 @@ class Calibration:
             convert_from_cm(distance_px * scale, self.display_unit), self.display_unit
         )
 
+    def _canvas_cm(self, axis: str) -> Optional[float]:
+        """The full canvas extent along ``axis`` in cm, or ``None`` if not physical."""
+        per = _CM_PER.get(self.canvas_unit)
+        if per is None:
+            return None
+        dim = self.canvas_w if axis == "x" else self.canvas_h
+        if dim <= 0:
+            return None
+        return dim * per
+
+    def fraction_str(self, fraction: float, axis: str) -> str:
+        """Format a gridline position (a fraction of the canvas) in the unit.
+
+        Returns ``""`` when there is no physical canvas (unit px/ratio or unset,
+        or the display unit is px), since a canvas position is only meaningful
+        once a real size and length unit are set.
+        """
+        canvas_cm = self._canvas_cm(axis)
+        if self.display_unit == "px" or canvas_cm is None:
+            return ""
+        pos_cm = float(fraction) * canvas_cm
+        return format_measure(
+            convert_from_cm(pos_cm, self.display_unit), self.display_unit
+        )
+
     def edge_label(
         self,
         px: float,

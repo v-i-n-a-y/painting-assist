@@ -233,6 +233,8 @@ class ImageView(QGraphicsView):
         # Non-destructive grid overlay, drawn above the pixmap.
         self._grid_item = GridOverlayItem()
         self._scene.addItem(self._grid_item)
+        # Last grid spec, kept so the foreground can label gridline positions.
+        self._grid_spec: Optional[Dict[str, Any]] = None
 
         # Pan with the left mouse button.
         self.setDragMode(QGraphicsView.ScrollHandDrag)
@@ -312,6 +314,8 @@ class ImageView(QGraphicsView):
         spec whose ``visible`` is false) hides the overlay.
         """
         self._grid_item.set_spec(spec)
+        self._grid_spec = spec
+        self.viewport().update()  # refresh the canvas-position gridline labels
 
     def set_placeholder(self, lines: list[str]) -> None:
         """Set the centred empty-state copy shown before any image is loaded.
@@ -558,6 +562,7 @@ class ImageView(QGraphicsView):
         while ``_has_image`` is false — the first loaded image hides it for good.
         """
         super().drawForeground(painter, rect)
+        self._draw_grid_labels(painter)
         self._draw_measure_labels(painter)
         if self._has_image or not self._placeholder_lines:
             return
@@ -578,8 +583,46 @@ class ImageView(QGraphicsView):
         painter.restore()
 
     # ------------------------------------------------------------------ #
-    # Measure-tool labels (drawn in the foreground, never clipped/trailed)
+    # Grid + measure labels (drawn in the foreground, never clipped/trailed)
     # ------------------------------------------------------------------ #
+    def _draw_grid_labels(self, painter: QPainter) -> None:
+        """Label each gridline with its position on the canvas.
+
+        Only drawn when the grid is visible and a physical canvas size is set
+        (a canvas position is meaningless otherwise); labels use the same unit as
+        the measure tools, so ``fraction_str`` returns ``""`` -- skipped here --
+        whenever no physical reading is available.
+        """
+        spec = self._grid_spec
+        if not spec or not spec.get("visible") or self._item.pixmap().isNull():
+            return
+        cal = self._measure_cal
+        rect = self._item.sceneBoundingRect()
+        painter.save()
+        painter.setWorldMatrixEnabled(False)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        fm = QFontMetrics(painter.font())
+        vp_rect = self.viewport().rect()
+        for fx in spec.get("x_fractions") or []:
+            text = cal.fraction_str(fx, "x")
+            if not text:
+                continue
+            sx = rect.left() + rect.width() * float(fx)
+            vp = self.mapFromScene(QPointF(sx, rect.top()))
+            self._paint_measure_label(
+                painter, fm, vp.x(), vp.y(), text, vp_rect, "below"
+            )
+        for fy in spec.get("y_fractions") or []:
+            text = cal.fraction_str(fy, "y")
+            if not text:
+                continue
+            sy = rect.top() + rect.height() * float(fy)
+            vp = self.mapFromScene(QPointF(rect.left(), sy))
+            self._paint_measure_label(
+                painter, fm, vp.x(), vp.y(), text, vp_rect, "below"
+            )
+        painter.restore()
+
     def _draw_measure_labels(self, painter: QPainter) -> None:
         """Paint the active measure tool's labels in viewport coordinates.
 
