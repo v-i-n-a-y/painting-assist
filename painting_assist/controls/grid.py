@@ -250,6 +250,12 @@ class GridControl(Control):
         """Identity: the grid is drawn by the viewer, not baked into pixels."""
         return img
 
+    def create_editor(self, parent: object = None):
+        """Build the grid editor (generic rows + canvas-position readout)."""
+        from painting_assist.widgets.grid_editor import GridEditor
+
+        return GridEditor(self, parent)
+
     def overlay_spec(self) -> Dict[str, Any]:
         """Return the resolved overlay parameters for the viewer to draw.
 

@@ -218,6 +218,8 @@ class MainWindow(QMainWindow):
             self._grid_control = self._pipeline.control("grid")
         except KeyError:
             self._grid_control = None
+        # The grid's custom editor carries the canvas-position readout.
+        self._grid_editor = self._panel.editor("grid")
 
         # Recent-files list (most-recent-first), persisted in QSettings.
         self._recent: list = []
@@ -1118,6 +1120,45 @@ class MainWindow(QMainWindow):
             self._view.set_grid_overlay(None)
             return
         self._view.set_grid_overlay(self._grid_control.overlay_spec())
+        self._update_grid_positions()
+
+    def _update_grid_positions(self) -> None:
+        """Refresh the Grid panel's readout of where the gridlines fall."""
+        if self._grid_editor is None or self._grid_control is None:
+            return
+        spec = self._grid_control.overlay_spec()
+        cal = self._measure_calibration()
+        self._grid_editor.set_positions_text(self._grid_positions_text(spec, cal))
+
+    @staticmethod
+    def _grid_positions_text(spec: dict, cal: Calibration) -> str:
+        """Format the gridline positions on the canvas from a spec + calibration.
+
+        Lists the vertical- and horizontal-line positions in the measure unit, or
+        a hint to set a canvas size when no physical reading is available.
+        """
+        if not spec.get("visible"):
+            return ""
+        xs = [
+            s
+            for s in (cal.fraction_str(fx, "x") for fx in spec.get("x_fractions") or [])
+            if s
+        ]
+        ys = [
+            s
+            for s in (cal.fraction_str(fy, "y") for fy in spec.get("y_fractions") or [])
+            if s
+        ]
+        if not xs and not ys:
+            return (
+                "Set a canvas size and unit in Canvas & Crop to see gridline positions."
+            )
+        lines = []
+        if xs:
+            lines.append("Verticals: " + ", ".join(xs))
+        if ys:
+            lines.append("Horizontals: " + ", ".join(ys))
+        return "\n".join(lines)
 
     def _ask_bake_grid(self) -> Optional[dict]:
         """Ask whether files being written should include the grid lines.
@@ -1374,8 +1415,9 @@ class MainWindow(QMainWindow):
         )
 
     def _update_measure_calibration(self) -> None:
-        """Push a fresh calibration to the view's measure tools."""
+        """Push a fresh calibration to the view's measure tools and grid readout."""
         self._view.set_measure_calibration(self._measure_calibration())
+        self._update_grid_positions()
 
     def _on_measure_unit_changed(self, _index: int) -> None:
         """Persist the chosen measure unit and re-calibrate the tools."""
