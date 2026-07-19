@@ -234,6 +234,17 @@ class GridControl(Control):
                 default=False,
                 tooltip="Draw corner-to-corner diagonals to find the centre.",
             ),
+            Param(
+                name="show_labels",
+                label="Position labels",
+                ptype=ParamType.BOOL,
+                default=True,
+                tooltip=(
+                    "Label each gridline with its position on the canvas, on the "
+                    "image (needs a canvas size in Canvas & Crop; the Grid panel "
+                    "lists them regardless)."
+                ),
+            ),
         ]
 
     def is_active(self) -> bool:
@@ -286,5 +297,6 @@ class GridControl(Control):
             "opacity": max(0.0, min(1.0, int(self.get("opacity")) / 100.0)),
             "thickness": max(1, int(self.get("thickness"))),
             "diagonals": diagonals,
+            "show_labels": bool(self.get("show_labels")),
             "visible": self.enabled and has_lines,
         }

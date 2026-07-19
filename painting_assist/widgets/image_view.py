@@ -594,7 +594,9 @@ class ImageView(QGraphicsView):
         whenever no physical reading is available.
         """
         spec = self._grid_spec
-        if not spec or not spec.get("visible") or self._item.pixmap().isNull():
+        if not spec or not spec.get("visible") or not spec.get("show_labels", True):
+            return
+        if self._item.pixmap().isNull():
             return
         cal = self._measure_cal
         rect = self._item.sceneBoundingRect()
