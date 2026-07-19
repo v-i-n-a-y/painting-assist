@@ -473,7 +473,7 @@ wheels = [
 
 [[package]]
 name = "painting-assist"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -483,6 +483,7 @@ dependencies = [
     { name = "opencv-python" },
     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pymixbox" },
     { name = "pyside6" },
 ]
 
@@ -500,6 +501,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pillow" },
+    { name = "pymixbox" },
     { name = "pyside6", specifier = "==6.8.1.1" },
 ]
 
@@ -859,6 +861,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/94/5b/c9fe0db5e83ee1c39b2258fa21d23b15e1a60786b6c5990ee5074ead8bb6/pyinstaller_hooks_contrib-2026.6.tar.gz", hash = "sha256:bef5002c32f4f50bd55b005da12cff64eca8783e7eaf86a06a62410164bab725", size = 173354, upload-time = "2026-06-08T22:37:16.152Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/31/f2d7343d8ed5f7c4678377886f6ce533e6eaaa131b252ce950114c2a7efa/pyinstaller_hooks_contrib-2026.6-py3-none-any.whl", hash = "sha256:fd13b8ac126b35361175edacd41a0d97080b75dd5f4b594ecefefff969509dd3", size = 457159, upload-time = "2026-06-08T22:37:14.722Z" },
+]
+
+[[package]]
+name = "pymixbox"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/84/7c9d23ea219dd9b88ab89219b1da33325ffe6cf854a69b5b49f83039ef45/pymixbox-2.0.0.tar.gz", hash = "sha256:7f1fc8e950778efedfc20bbeeaf240576baca06726b3ce83a97ce507f226aee4", size = 125012, upload-time = "2022-09-20T12:58:08.915Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/45/64a4d16175dda7cc61742ea2324df277c0f7875010833a3f08a450c83c3e/pymixbox-2.0.0-py2.py3-none-any.whl", hash = "sha256:ac645ee27989ee96622579250ccc057ede2cc57847c56c73082eae2e47341aa4", size = 123258, upload-time = "2022-09-20T12:58:05.97Z" },
 ]
 
 [[package]]

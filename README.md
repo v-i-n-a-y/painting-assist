@@ -33,6 +33,14 @@ errors. Toggle it from the Flip section in the dock or with the F key. A
 vertical flip is available too. Because it sits in the pipeline everything
 downstream, including the eyedropper and Save, sees the flipped image.
 
+### White balance, remove a colour cast
+
+Photos taken under warm or cool light lie about colour, and every reading
+downstream inherits that cast. Pick a patch that should be neutral grey, with
+View then Pick Grey Point, and the control shifts the whole image so that patch
+becomes neutral. It runs early, so the value and colour tools below see the
+corrected image.
+
 ### Tone, judge temperature and contrast
 
 Global contrast, saturation and temperature knobs, all neutral at zero. Tone
@@ -58,17 +66,36 @@ hex and read its value percentage, hue angle and chroma.
 - Isolate band dims everything outside one chosen value band, so you can study a
   single value mass on its own.
 
-### Eyedropper, read any colour and match a mix
+The Values histogram panel, tabbed with the Palette below the image, shows how
+much of the picture falls in the dark, mid and light masses, so you can judge
+the value balance of a block-in at a glance.
+
+### Temperature map, see warm against cool
+
+A diagnostic false-colour view that paints warm zones one way and cool zones
+another, so the relative temperature shifts a colourist works with become
+obvious across the whole picture. A strength knob fades it back toward plain
+greyscale.
+
+### Eyedropper, read any colour and mix it from your tubes
 
 Press I (or use the toolbar button), then click the image to read the colour you
 are actually looking at. The hex, RGB, value percentage, hue and chroma appear
 in the status bar and the Palette panel. Set the sample size in the Palette
 panel to average a small area rather than one noisy pixel, which matters when
-you are matching a colour for the mid layers. Alongside the reading the panel
-suggests an approximate mix from a limited palette, for example the Zorn earth
-set, as a rough starting point rather than a precise recipe. Clicking any
-colour-group swatch gives the same suggestion for that swatch, and Export
-Palette under the File menu writes the swatches out as a PNG strip.
+you are matching a colour for the mid layers.
+
+Record the paints you own under File then My Paints, either by hand or from a
+built-in catalogue of common pigments, and the panel suggests how to mix the
+sampled colour from your actual tubes. Mixing is done with Mixbox, which models
+real pigment behaviour, so blue and yellow make green rather than grey. In
+Settings you set how close a mix must be to count as a match, and what happens
+when a colour is out of reach: either show you the closest you can get, or name
+a paint worth buying to reach it. When a colour simply cannot be mixed from your
+tubes you are told so plainly. With no tubes recorded the panel falls back to a
+rough suggestion from a built-in limited palette. Clicking any colour-group
+swatch gives the same suggestion for that swatch, and Export Palette under the
+File menu writes the swatches out as a PNG strip.
 
 ### Measure and proportion
 
@@ -80,12 +107,14 @@ bar as you drag.
 
 ### Grid, position by the grid method
 
-An even columns by rows grid to transfer proportions and placement onto a
-matching grid on your canvas. Pick the colour, opacity and line width, and add
-corner-to-corner diagonals if you want to find the centre. The grid is a viewer
-overlay, so it stays crisp at any zoom and is never baked into the processed
-pixels. When you Save or export with it showing, the app asks whether to draw it
-into the file, so you can still print a gridded reference.
+A grid to transfer proportions and placement onto a matching grid on your
+canvas. Choose the layout, either an even columns by rows lattice or a ratio
+guide (rule of thirds, golden sections, quarters, or a diagonal armature), and
+pick the colour, opacity and line width. The grid is a viewer overlay, so it
+stays crisp at any zoom and is never baked into the processed pixels. When you
+Save or export with it showing, the app asks whether to draw it into the file,
+so you can still print a gridded reference, and it remembers your answer for the
+session.
 
 ### Canvas and Crop, match your surface
 
@@ -248,4 +277,10 @@ The generic `ParamType` set is `INT`, `FLOAT`, `BOOL`, `CHOICE` and `TEXT`.
 
 ## Licence
 
-Released under the MIT Licence. See [`LICENSE`](LICENSE) for the full text.
+The source code is released under the MIT Licence. See [`LICENSE`](LICENSE) for
+the full text.
+
+Colour mixing is powered by [Mixbox](https://scrtwpns.com/mixbox), which is
+licensed under CC BY-NC 4.0 (non-commercial). Because the prebuilt installers
+bundle Mixbox, those binaries are for non-commercial use; the source itself
+stays MIT. See [`NOTICE`](NOTICE) for the attribution and details.

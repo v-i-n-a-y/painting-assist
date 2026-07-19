@@ -1,0 +1,20 @@
+Painting Assist
+Copyright (c) 2026 Vinay Williams
+
+This product's own source code is released under the MIT Licence (see LICENSE).
+
+------------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------------
+
+Mixbox (pymixbox)
+  Physically-plausible pigment colour mixing.
+  Copyright (c) Secret Weapons (https://scrtwpns.com/mixbox).
+  Licensed under Creative Commons Attribution-NonCommercial 4.0 International
+  (CC BY-NC 4.0): https://creativecommons.org/licenses/by-nc/4.0/
+
+  Mixbox is free for non-commercial use only. Because the prebuilt Painting
+  Assist installers bundle Mixbox, those binaries are for non-commercial use.
+  The Painting Assist source code itself remains under the MIT Licence; running
+  from source without Mixbox installed carries no such restriction. For
+  commercial use of Mixbox, contact mixbox@scrtwpns.com.

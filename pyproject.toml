@@ -2,7 +2,7 @@
 
 [project]
 name = "painting-assist"
-version = "0.5.0"
+version = "0.6.0"
 description = "Painting Assist, a coarse to fine painting reference tool"
 requires-python = ">=3.9"
 license = "MIT"
@@ -14,6 +14,11 @@ dependencies = [
     "numpy",
     "opencv-python",
     "Pillow",
+    # Physically-plausible pigment mixing (Kubelka-Munk latent space). Note:
+    # pymixbox is CC BY-NC 4.0 (non-commercial); see NOTICE. Bundling it makes
+    # the built installers non-commercial while this project's own source stays
+    # MIT.
+    "pymixbox",
 ]
 
 [project.scripts]

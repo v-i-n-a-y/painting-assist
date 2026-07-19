@@ -35,7 +35,15 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
-from painting_assist import __author__, __version__, colour_mixing, theme, updater
+from painting_assist import (
+    __author__,
+    __version__,
+    colour_mixing,
+    mixing,
+    paints,
+    theme,
+    updater,
+)
 from painting_assist.controls import registry
 from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
@@ -49,8 +57,11 @@ from painting_assist.widgets.palette_panel import (
     render_palette_strip,
 )
 from painting_assist.widgets.value_histogram import ValueHistogram
+from painting_assist.widgets.paints_dialog import PaintsDialog
 from painting_assist.widgets.settings_dialog import (
+    DEFAULT_ON_MISS,
     DEFAULT_THEME,
+    DEFAULT_TOLERANCE_PCT,
     DEFAULT_UPDATE_HOURS,
     SettingsDialog,
 )
@@ -174,6 +185,9 @@ class MainWindow(QMainWindow):
         self._picking_grey = False
         # Session grid-bake choice: None = ask each time, True/False = remembered.
         self._grid_bake_choice: Optional[bool] = None
+        # Last colour sampled/clicked, so a settings or inventory change can
+        # refresh the mixing suggestion in place.
+        self._last_sample_rgb: Optional[tuple] = None
 
         self._slider_down = False
         self._crop_editing = False
@@ -224,6 +238,18 @@ class MainWindow(QMainWindow):
             )
         except (TypeError, ValueError):
             self._update_hours = DEFAULT_UPDATE_HOURS
+
+        # ---- colour-matching settings + paint inventory ----
+        try:
+            self._tolerance_pct = int(
+                settings.value("settings/tolerance_pct", DEFAULT_TOLERANCE_PCT)
+            )
+        except (TypeError, ValueError):
+            self._tolerance_pct = DEFAULT_TOLERANCE_PCT
+        self._on_miss = str(settings.value("settings/on_miss", DEFAULT_ON_MISS))
+        self._paints = paints.paints_from_json(
+            settings.value("settings/paints") or "[]"
+        )
 
         # ---- update checker (off-thread; signals land on the GUI thread) ----
         self._updater = updater.UpdateChecker(__version__, self)
@@ -447,6 +473,13 @@ class MainWindow(QMainWindow):
         # relocate a PreferencesRole action into the application menu, but under
         # the frozen bundle that merge doesn't reliably land, leaving no Settings
         # entry anywhere — so we pin it here with NoRole. Cmd+, still works.
+        my_paints_action = QAction("My Paints…", self)
+        my_paints_action.setStatusTip(
+            "Record the paint tubes you own, used for mixing suggestions"
+        )
+        my_paints_action.triggered.connect(self._on_my_paints)
+        file_menu.addAction(my_paints_action)
+
         self._settings_action = QAction("Settings…", self)
         self._settings_action.setMenuRole(QAction.NoRole)
         self._settings_action.setShortcut(QKeySequence.Preferences)
@@ -843,21 +876,45 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     def _on_settings(self) -> None:
         """Open the settings dialog; apply and persist any accepted changes."""
-        dialog = SettingsDialog(self._theme_mode, self._update_hours, self)
+        dialog = SettingsDialog(
+            self._theme_mode,
+            self._update_hours,
+            self._tolerance_pct,
+            self._on_miss,
+            self,
+        )
         if not dialog.exec():
             return
         values = dialog.values()
         self._theme_mode = str(values["theme"])
         self._update_hours = float(values["update_hours"])
+        self._tolerance_pct = int(values["tolerance_pct"])
+        self._on_miss = str(values["on_miss"])
 
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         settings.setValue("settings/theme", self._theme_mode)
         settings.setValue("settings/update_hours", self._update_hours)
+        settings.setValue("settings/tolerance_pct", self._tolerance_pct)
+        settings.setValue("settings/on_miss", self._on_miss)
 
         app = QApplication.instance()
         if app is not None:
             theme.apply_theme(app, self._theme_mode)
         self._apply_update_schedule(startup=False)
+        # Refresh any showing mix suggestion with the new tolerance/behaviour.
+        if self._last_sample_rgb is not None:
+            self._palette_panel.set_mixing(self._mix_text(self._last_sample_rgb))
+
+    def _on_my_paints(self) -> None:
+        """Open the paint-inventory manager and persist any changes."""
+        dialog = PaintsDialog(self._paints, self)
+        if not dialog.exec():
+            return
+        self._paints = dialog.paints()
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("settings/paints", paints.paints_to_json(self._paints))
+        if self._last_sample_rgb is not None:
+            self._palette_panel.set_mixing(self._mix_text(self._last_sample_rgb))
 
     # ------------------------------------------------------------------ #
     # Update checking
@@ -1023,6 +1080,7 @@ class MainWindow(QMainWindow):
             spec["opacity"],
             spec["thickness"],
             spec["diagonals"],
+            spec.get("layout", "even"),
         )
 
     # ------------------------------------------------------------------ #
@@ -1069,6 +1127,7 @@ class MainWindow(QMainWindow):
         if self._picking_grey:
             self._set_grey_point(rgb)
             return
+        self._last_sample_rgb = rgb
         self._palette_panel.set_sample(rgb)
         self._palette_panel.set_mixing(self._mix_text(rgb))
         self.statusBar().showMessage(format_readout(rgb))
@@ -1112,21 +1171,46 @@ class MainWindow(QMainWindow):
     def _on_swatch_clicked(self, rgb: tuple) -> None:
         """A palette swatch was clicked: show a mixing suggestion for it."""
         rgb = tuple(int(c) for c in rgb)
+        self._last_sample_rgb = rgb
         self._palette_panel.set_mixing(self._mix_text(rgb))
 
-    @staticmethod
-    def _mix_text(rgb: tuple) -> str:
-        """Build a short mixing-and-description string for a colour."""
+    def _mix_text(self, rgb: tuple) -> str:
+        """Build a short description-and-mixing string for a colour.
+
+        The first line describes the colour (value, temperature, hue, modifier).
+        The second line is a mixing suggestion: from the painter's own tubes when
+        they have set any up (via mixbox pigment mixing, honouring the tolerance
+        and closest-versus-buy preference), otherwise from a built-in limited
+        palette as a rough guide.
+        """
         info = colour_mixing.describe_colour(rgb)
+        head = "{value:.0f}% value · {temperature} {hue_name} · {modifier}".format(
+            **info
+        )
+        if self._paints:
+            suggestion = mixing.suggest(
+                rgb,
+                self._paints,
+                self._tolerance_pct,
+                self._on_miss,
+                paints.DEFAULT_CATALOGUE,
+            )
+            if suggestion.recipe:
+                recipe = ", ".join(
+                    "{} {:.0f}%".format(name, share * 100)
+                    for name, share in suggestion.recipe
+                )
+                return "{}\n{}\n{}".format(head, recipe, suggestion.message)
+            return "{}\n{}".format(head, suggestion.message)
+        # No tubes recorded yet: fall back to the built-in limited palette.
         parts = colour_mixing.suggest_mix(rgb, _MIX_PALETTE)
         label = colour_mixing.BASE_PALETTES[_MIX_PALETTE]["label"]
         recipe = ", ".join(
             "{} {:.0f}%".format(name, share * 100) for name, share in parts
         )
-        return (
-            "{value:.0f}% value · {temperature} {hue_name} · {modifier}\n"
-            "{label}: {recipe}"
-        ).format(label=label, recipe=recipe, **info)
+        return "{}\n{}: {}  (set up My Paints for your tubes)".format(
+            head, label, recipe
+        )
 
     # ------------------------------------------------------------------ #
     # Measure tools

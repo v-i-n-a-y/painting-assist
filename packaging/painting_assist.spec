@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 RESOURCES = PROJECT_ROOT / "painting_assist" / "resources"
 
-APP_VERSION = "0.5.0"  # keep in sync with pyproject.toml / __init__.py
+APP_VERSION = "0.6.0"  # keep in sync with pyproject.toml / __init__.py
 
 # Display name for the bundle; binary name differs on win/linux (no spaces).
 APP_DISPLAY_NAME = "Painting Assist"
@@ -42,7 +42,9 @@ a = Analysis(
     binaries=[],
     # Ship the whole resources/ dir as package data under painting_assist/.
     datas=[(str(RESOURCES), "painting_assist/resources")],
-    hiddenimports=[],
+    # mixbox is imported lazily (guarded) by painting_assist.mixing, so name it
+    # explicitly to be sure PyInstaller bundles it (single self-contained module).
+    hiddenimports=["mixbox"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
