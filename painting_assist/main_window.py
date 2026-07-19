@@ -84,7 +84,9 @@ _SETTINGS_APP = "Painting Assist"
 # Bumped whenever the dock layout changes shape so a saved arrangement from an
 # older version (e.g. the single "Controls" dock) is ignored and the new default
 # split is shown instead, rather than restoring a layout that no longer fits.
-_LAYOUT_VERSION = 2
+# v3: nested/inline dock drops enabled, so any earlier all-tabbed arrangement is
+# reset once to the clean default split.
+_LAYOUT_VERSION = 3
 
 # Maps a chosen save filter to the extension to append when the user's path has
 # none (so a bare "portrait" saves as "portrait.png" rather than a raw file).
@@ -334,6 +336,19 @@ class MainWindow(QMainWindow):
         sessions via the window's saved state, so this default only applies until
         the painter rearranges the docks (or on a layout-version bump).
         """
+        # Allow nested (edge-split) drops and grouped dragging, not just the
+        # default tab-on-drop. This is what lets the painter drop a control dock
+        # *inline* (stacked above/below another) as well as tabbed onto it: each
+        # dock then exposes five drop zones, its four edges split inline and its
+        # centre forms a tab group. Without AllowNestedDocks, Qt mostly offers
+        # the centre (tab) drop, so docks clump into tab groups instead.
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.GroupedDragging
+        )
+
         left_ids = {"crop", "flip", "grid"}
         self._control_docks: list = []
         # The last dock placed on each side, so the next one stacks beneath it.
