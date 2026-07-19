@@ -13,23 +13,25 @@ not. That glue is opt-in and degrades gracefully if no ``crop`` control exists.
 from __future__ import annotations
 
 import json
+import math
 import os
-from typing import Optional
-
 import time
+from typing import Optional
 
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QSettings, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDockWidget,
     QFileDialog,
     QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QToolBar,
 )
 
@@ -46,6 +48,7 @@ from painting_assist.widgets.palette_panel import (
     format_readout,
     render_palette_strip,
 )
+from painting_assist.widgets.value_histogram import ValueHistogram
 from painting_assist.widgets.settings_dialog import (
     DEFAULT_THEME,
     DEFAULT_UPDATE_HOURS,
@@ -152,8 +155,25 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, palette_dock)
         self._palette_dock = palette_dock
 
+        # ---- value histogram dock (value distribution of the current frame) ----
+        self._histogram = ValueHistogram()
+        hist_dock = QDockWidget("Values histogram", self)
+        hist_dock.setObjectName("histogram_dock")
+        hist_dock.setWidget(self._histogram)
+        hist_dock.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        self.addDockWidget(Qt.BottomDockWidgetArea, hist_dock)
+        self.tabifyDockWidget(palette_dock, hist_dock)
+        palette_dock.raise_()
+        self._histogram_dock = hist_dock
+
         # Latest colour-group palette (for export); kept in step with renders.
         self._current_palette: list = []
+
+        # One-shot grey-point pick: when armed, the next eyedropper sample sets
+        # the White balance neutral instead of just reading a colour.
+        self._picking_grey = False
+        # Session grid-bake choice: None = ask each time, True/False = remembered.
+        self._grid_bake_choice: Optional[bool] = None
 
         self._slider_down = False
         self._crop_editing = False
@@ -240,6 +260,33 @@ class MainWindow(QMainWindow):
         # ---- measure tools readout ----
         self._view.measureChanged.connect(self._on_measure_changed)
 
+        # ---- viewer feedback + async load ----
+        self._view.zoomChanged.connect(self._on_zoom_changed)
+        self._model.load_failed.connect(self._on_load_failed)
+
+        # Values (V) and Flip (F) as application-wide shortcuts so they keep
+        # working even when a dock widget holds keyboard focus. Hold-B stays in
+        # keyPressEvent because it needs the matching key-release.
+        self._values_shortcut = QShortcut(QKeySequence("V"), self)
+        self._values_shortcut.setContext(Qt.ApplicationShortcut)
+        self._values_shortcut.activated.connect(self._toggle_values)
+        self._flip_shortcut = QShortcut(QKeySequence("F"), self)
+        self._flip_shortcut.setContext(Qt.ApplicationShortcut)
+        self._flip_shortcut.activated.connect(self._toggle_flip)
+
+        # A friendly empty state until the first image is opened.
+        self._view.set_placeholder(
+            [
+                "Open an image (Ctrl+O) or drag one here",
+                "",
+                "Block in the big masses first with Blur,",
+                "then reveal detail as your painting builds.",
+            ]
+        )
+
+        # Minimum size so the three docks and viewport can't be crushed.
+        self.setMinimumSize(900, 600)
+
         # ---- restore persisted window + control session (built UI first) ----
         self._restore_session()
         self._update_grid_overlay()
@@ -277,13 +324,14 @@ class MainWindow(QMainWindow):
         self._save_action.triggered.connect(self._on_save)
         toolbar.addAction(self._save_action)
 
+        # Export Blur Steps is available from the File menu; keep it off the
+        # toolbar since it is wide and disabled unless Blur is in Stepped mode.
         self._export_action = QAction("Export Blur Steps", self)
         self._export_action.setShortcut(QKeySequence("Ctrl+E"))
         self._export_action.setStatusTip(
             "Export one image per blur stage (Blur must be in Stepped mode)"
         )
         self._export_action.triggered.connect(self._on_export_steps)
-        toolbar.addAction(self._export_action)
 
         toolbar.addSeparator()
 
@@ -320,6 +368,7 @@ class MainWindow(QMainWindow):
             act = QAction(label, self)
             act.setCheckable(True)
             act.setStatusTip(tip)
+            act.setToolTip(tip)  # hover explains the tool, not just its name
             act.toggled.connect(
                 lambda checked, m=mode: self._on_measure_toggled(m, checked)
             )
@@ -349,12 +398,14 @@ class MainWindow(QMainWindow):
         self._reset_action.triggered.connect(self._on_reset)
         toolbar.addAction(self._reset_action)
 
-        # Permanent right-side status-bar label reflecting the renderer's activity.
+        # Permanent right-side status-bar labels: render activity and zoom level.
         self._busy_label = QLabel("")
         self.statusBar().addPermanentWidget(self._busy_label)
+        self._zoom_label = QLabel("")
+        self.statusBar().addPermanentWidget(self._zoom_label)
 
         self.statusBar().showMessage(
-            "Open a reference image to begin. Tip: hold B to compare with the original."
+            "Open an image (Ctrl+O) or drag one onto the window."
         )
 
     def _build_menus(self) -> None:
@@ -418,8 +469,17 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self._dock.toggleViewAction())
         view_menu.addAction(self._palette_dock.toggleViewAction())
+        view_menu.addAction(self._histogram_dock.toggleViewAction())
         view_menu.addSeparator()
         view_menu.addAction(self._eyedropper_action)
+
+        grey_point_action = QAction("Pick Grey Point…", self)
+        grey_point_action.setStatusTip(
+            "Click a should-be-neutral patch to correct the colour cast (white balance)"
+        )
+        grey_point_action.triggered.connect(self._on_pick_grey)
+        view_menu.addAction(grey_point_action)
+
         measure_menu = view_menu.addMenu("Measure")
         for mode in ("angle", "caliper", "guides"):
             measure_menu.addAction(self._measure_actions[mode])
@@ -428,6 +488,10 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._actual_action)
 
         help_menu = self.menuBar().addMenu("Help")
+        getting_started_action = QAction("Getting Started", self)
+        getting_started_action.triggered.connect(self._on_getting_started)
+        help_menu.addAction(getting_started_action)
+
         shortcuts_action = QAction("Keyboard Shortcuts", self)
         shortcuts_action.triggered.connect(self._on_shortcuts)
         help_menu.addAction(shortcuts_action)
@@ -472,6 +536,16 @@ class MainWindow(QMainWindow):
         self._recent = update_recent(self._recent, path)
         self._save_recent()
 
+    def _begin_load(self, path: str) -> None:
+        """Start an asynchronous image load, showing a busy hint.
+
+        Decoding runs off the GUI thread so a large photo does not freeze the
+        window. Success arrives via ``image_loaded`` (:meth:`_on_image_loaded`)
+        and failure via ``load_failed`` (:meth:`_on_load_failed`).
+        """
+        self._busy_label.setText("Opening…")
+        self._model.load_path_async(path)
+
     def _open_recent(self, path: str) -> None:
         """Open a path chosen from the Open Recent menu (prune it if it's gone)."""
         if not os.path.exists(path):
@@ -483,10 +557,7 @@ class MainWindow(QMainWindow):
             self._recent = prune_recent(self._recent)
             self._save_recent()
             return
-        try:
-            self._model.load_path(path)
-        except Exception as exc:  # pragma: no cover - GUI error path
-            QMessageBox.critical(self, "Open failed", f"Could not open image:\n{exc}")
+        self._begin_load(path)
 
     def _clear_recent(self) -> None:
         """Empty the recent-files list."""
@@ -536,7 +607,12 @@ class MainWindow(QMainWindow):
             for control in self._pipeline.controls():
                 control_state = state.get(control.id)
                 if isinstance(control_state, dict):
-                    control.load_state(control_state)
+                    try:
+                        control.load_state(control_state)
+                    except Exception:  # pragma: no cover - defensive
+                        # A malformed snapshot for one control degrades to its
+                        # current/default state rather than failing the whole apply.
+                        pass
             self._panel.refresh_all()
         finally:
             self._applying_state = False
@@ -671,6 +747,25 @@ class MainWindow(QMainWindow):
             f"<b>{APP_NAME}</b><br>Version {__version__}<br><br>Author: {__author__}",
         )
 
+    def _on_getting_started(self) -> None:
+        """Show a short in-app primer on the coarse-to-fine workflow."""
+        QMessageBox.information(
+            self,
+            "Getting Started",
+            "<b>Painting Assist</b> shows a reference photo the way a painter "
+            "sees it, so you can work from a deliberately simplified view.<br><br>"
+            "1. Open a photo (Ctrl+O) or drag one onto the window.<br>"
+            "2. Turn on <b>Blur</b> and pull it right down to block in the big "
+            "value masses first, then ease it back to let detail return as your "
+            "painting builds.<br>"
+            "3. Use <b>Values</b> to check your notan, <b>Colour groups</b> to "
+            "see flat colour masses, and the <b>eyedropper</b> (I) to read and "
+            "mix any colour.<br>"
+            "4. Nothing changes the original. <b>Save</b> writes out the view you "
+            "currently see, and Reset returns to the untouched photo.<br><br>"
+            "Hold <b>B</b> at any time to compare with the original.",
+        )
+
     def _on_shortcuts(self) -> None:
         """Show a simple dialog listing the keyboard shortcuts."""
         QMessageBox.information(
@@ -679,6 +774,7 @@ class MainWindow(QMainWindow):
             "Ctrl+O\tOpen image\n"
             "Ctrl+S\tSave processed image\n"
             "Ctrl+E\tExport blur steps\n"
+            "Ctrl+,\tSettings\n"
             "Ctrl+0\tFit to window\n"
             "Ctrl+1\tActual size (1:1)\n"
             "Ctrl+Z\tUndo\n"
@@ -688,7 +784,10 @@ class MainWindow(QMainWindow):
             "Hold B\tShow the original (before/after)\n"
             "V\tToggle the Values control\n"
             "F\tToggle the Flip control\n"
-            "I\tEyedropper (click the image to read a colour)",
+            "I\tEyedropper (click the image to read a colour)\n"
+            "\n"
+            "Mouse wheel\tZoom about the cursor\n"
+            "Drag\tPan the image",
         )
 
     # ------------------------------------------------------------------ #
@@ -773,7 +872,8 @@ class MainWindow(QMainWindow):
         """
         self._update_timer.stop()
         hours = self._update_hours
-        if hours <= 0.0:
+        # A corrupt/non-finite persisted interval must not reach int(...*3600*1000).
+        if not math.isfinite(hours) or hours <= 0.0:
             return
         if hours < 1.0:  # "Every launch"
             if startup:
@@ -883,23 +983,32 @@ class MainWindow(QMainWindow):
         """Ask whether files being written should include the grid lines.
 
         The grid is a viewer overlay and no longer part of the pipeline output,
-        so saving would silently drop it. When the overlay is showing, ask once
-        (default No) and return the overlay spec to bake with, else ``None``.
+        so saving would silently drop it. When the overlay is showing, ask (with
+        a "remember for this session" checkbox) and return the overlay spec to
+        bake with, else ``None``. Once answered, the session choice is reused so
+        repeated saves are not nagged.
         """
         if self._grid_control is None:
             return None
         spec = self._grid_control.overlay_spec()
         if not spec.get("visible"):
             return None
-        answer = QMessageBox.question(
-            self,
-            "Include grid?",
+        if self._grid_bake_choice is not None:
+            return spec if self._grid_bake_choice else None
+        box = QMessageBox(self)
+        box.setWindowTitle("Include grid?")
+        box.setText(
             "The grid overlay is showing. Draw the grid lines into the saved "
-            "image as well?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            "image as well?"
         )
-        return spec if answer == QMessageBox.Yes else None
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        remember = QCheckBox("Remember for this session")
+        box.setCheckBox(remember)
+        include = box.exec() == QMessageBox.Yes
+        if remember.isChecked():
+            self._grid_bake_choice = include
+        return spec if include else None
 
     @staticmethod
     def _bake_grid(processed: np.ndarray, spec: Optional[dict]) -> np.ndarray:
@@ -928,8 +1037,11 @@ class MainWindow(QMainWindow):
         if active:
             # Eyedropper and the measure tools both want the mouse; only one.
             self._clear_measure_tools()
+        else:
+            # Leaving eyedropper mode cancels any pending grey-point pick.
+            self._picking_grey = False
         self._view.set_eyedropper(active)
-        if active:
+        if active and not self._picking_grey:
             self.statusBar().showMessage(
                 "Eyedropper: click the image to read a colour.", 4000
             )
@@ -954,9 +1066,48 @@ class MainWindow(QMainWindow):
         x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
         region = image[y0:y1, x0:x1].reshape(-1, image.shape[2])
         rgb = tuple(int(round(v)) for v in region.mean(axis=0))
+        if self._picking_grey:
+            self._set_grey_point(rgb)
+            return
         self._palette_panel.set_sample(rgb)
         self._palette_panel.set_mixing(self._mix_text(rgb))
         self.statusBar().showMessage(format_readout(rgb))
+
+    def _set_grey_point(self, rgb: tuple) -> None:
+        """Use a sampled patch as the White balance neutral (grey-point)."""
+        self._picking_grey = False
+        self._eyedropper_action.setChecked(False)
+        try:
+            self._pipeline.control("white_balance")
+        except KeyError:
+            QMessageBox.information(
+                self, "No white balance", "The White balance control is unavailable."
+            )
+            return
+        r, g, b = (int(c) for c in rgb)
+        self._pipeline.set_value("white_balance", "neutral_r", r)
+        self._pipeline.set_value("white_balance", "neutral_g", g)
+        self._pipeline.set_value("white_balance", "neutral_b", b)
+        self._pipeline.set_enabled("white_balance", True)
+        self._panel.refresh_all()
+        self._commit_state()
+        self._request_render(interactive=False)
+        self.statusBar().showMessage(
+            "Grey point set from {}; White balance is on.".format(format_readout(rgb)),
+            5000,
+        )
+
+    def _on_pick_grey(self) -> None:
+        """Arm a one-shot grey-point pick: the next eyedropper click sets it."""
+        if self._crop_editing:
+            return
+        self._picking_grey = True
+        self._clear_measure_tools()
+        self._eyedropper_action.setChecked(True)
+        self.statusBar().showMessage(
+            "Click something that should be neutral grey to correct the colour cast.",
+            6000,
+        )
 
     def _on_swatch_clicked(self, rgb: tuple) -> None:
         """A palette swatch was clicked: show a mixing suggestion for it."""
@@ -999,6 +1150,10 @@ class MainWindow(QMainWindow):
                 act.setChecked(False)
                 act.blockSignals(False)
         self._view.set_measure_mode(mode)
+        self.statusBar().showMessage(
+            "Drag the handles on the image to measure; click the tool again to finish.",
+            5000,
+        )
 
     def _clear_measure_tools(self) -> None:
         """Deactivate any measure tool and untick its button."""
@@ -1012,6 +1167,20 @@ class MainWindow(QMainWindow):
     def _on_measure_changed(self, readout: str) -> None:
         """Show the active measure tool's live readout in the status bar."""
         self.statusBar().showMessage(readout)
+
+    # ------------------------------------------------------------------ #
+    # Viewer feedback + async load
+    # ------------------------------------------------------------------ #
+    def _on_zoom_changed(self, scale: float) -> None:
+        """Show the current zoom level in the status bar."""
+        self._zoom_label.setText("{:.0f}%".format(scale * 100.0))
+
+    def _on_load_failed(self, path: str, message: str) -> None:
+        """An asynchronous image load failed: tell the user, clear busy."""
+        self._busy_label.clear()
+        QMessageBox.critical(
+            self, "Open failed", "Could not open image:\n{}".format(message)
+        )
 
     def _on_export_palette(self) -> None:
         """Save the current colour-group swatches as a PNG strip."""
@@ -1041,10 +1210,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Open image", "", _OPEN_FILTER)
         if not path:
             return
-        try:
-            self._model.load_path(path)
-        except Exception as exc:  # pragma: no cover - GUI error path
-            QMessageBox.critical(self, "Open failed", f"Could not open image:\n{exc}")
+        self._begin_load(path)
 
     def _on_save(self) -> None:
         """Render the current PROCESSED image at full resolution and save it.
@@ -1063,15 +1229,22 @@ class MainWindow(QMainWindow):
         if not path:
             return
         path = self._ensure_extension(path, selected)
+        # Ask about the grid before the wait cursor so the dialog stays usable.
+        bake_spec = self._ask_bake_grid()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._busy_label.setText("Saving…")
         try:
             save_pipeline = ControlPipeline(registry.create_all())
             for control in self._pipeline.controls():
                 save_pipeline.control(control.id).load_state(control.to_state())
             processed = save_pipeline.process(source)
-            processed = self._bake_grid(processed, self._ask_bake_grid())
+            processed = self._bake_grid(processed, bake_spec)
             self._write_image_rgb(path, processed)
         except Exception as exc:  # pragma: no cover - GUI error path
             QMessageBox.critical(self, "Save failed", f"Could not save image:\n{exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._busy_label.clear()
 
     @staticmethod
     def _ensure_extension(path: str, selected_filter: str) -> str:
@@ -1140,9 +1313,17 @@ class MainWindow(QMainWindow):
         # Ask once whether the (viewer-overlay) grid should be drawn into the files.
         bake_spec = self._ask_bake_grid()
 
+        progress = QProgressDialog("Exporting blur steps…", "Cancel", 0, count, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
         written = 0
         try:
             for stage in range(1, count + 1):
+                if progress.wasCanceled():
+                    break
+                progress.setLabelText("Exporting step {} of {}…".format(stage, count))
+                progress.setValue(stage - 1)
                 blur.set("stage", stage)
                 processed = export_pipeline.process(source)
                 processed = self._bake_grid(processed, bake_spec)
@@ -1152,7 +1333,9 @@ class MainWindow(QMainWindow):
                 )
                 self._write_image_rgb(os.path.join(directory, fname), processed)
                 written += 1
+            progress.setValue(count)
         except Exception as exc:  # pragma: no cover - GUI error path
+            progress.cancel()
             QMessageBox.critical(
                 self,
                 "Export failed",
@@ -1188,8 +1371,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     def _on_image_loaded(self) -> None:
         """A new original was loaded: show it (fit) and kick a full render."""
+        self._busy_label.clear()
         if self._crop_editing:
             self._end_crop_edit(render=False)
+        # A previous in-flight render must not paint over the new image.
+        self._renderer.invalidate_source()
         original = self._model.original()
         if original is not None:
             self._view.set_image(original, preserve_view=False)
@@ -1199,7 +1385,9 @@ class MainWindow(QMainWindow):
         # Undo history is per-reference; a fresh image starts a clean slate.
         self._reset_history()
         self._request_render(interactive=False)
-        self.statusBar().showMessage("Reference loaded.", 4000)
+        self.statusBar().showMessage(
+            "Reference loaded. Hold B to compare with the original.", 5000
+        )
 
     def _on_param(self, cid: str, name: str, value: object) -> None:
         """A param value changed: update the pipeline and request a render."""
@@ -1268,6 +1456,10 @@ class MainWindow(QMainWindow):
             self._current_palette = []
             self._palette_panel.clear()
         self._export_palette_action.setEnabled(bool(self._current_palette))
+        # Keep the value histogram in step with the full-res frame (skip cheap
+        # preview frames so the distribution reflects the real image).
+        if was_full and image is not None:
+            self._histogram.set_image(image)
         if self._crop_editing:
             return
         # Remember the processed frame so the before/after toggle can restore it
@@ -1379,10 +1571,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         event.acceptProposedAction()
-        try:
-            self._model.load_path(path)
-        except Exception as exc:  # pragma: no cover - GUI error path
-            QMessageBox.critical(self, "Open failed", f"Could not open image:\n{exc}")
+        self._begin_load(path)
 
     # ------------------------------------------------------------------ #
     # Before/after toggle (hold B to view the untouched original)
@@ -1467,7 +1656,11 @@ class MainWindow(QMainWindow):
                 for control in self._pipeline.controls():
                     control_state = states.get(control.id)
                     if isinstance(control_state, dict):
-                        control.load_state(control_state)
+                        try:
+                            control.load_state(control_state)
+                        except Exception:  # pragma: no cover - defensive
+                            # One corrupt control state must not block startup.
+                            pass
                 self._panel.refresh_all()
         # The restored blur mode determines Export availability.
         self._update_export_enabled()

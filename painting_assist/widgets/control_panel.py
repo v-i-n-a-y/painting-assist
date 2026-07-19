@@ -375,6 +375,15 @@ class ControlSection(QGroupBox):
         self._param_widgets: Dict[str, ParamWidget] = {}
         self._custom_editor: Optional[QWidget] = None
 
+        # Surface the control's own one-line help on hover: its ``description``
+        # if set, otherwise the first sentence of its docstring. Turns the
+        # already-written explanations into in-context help at no extra cost.
+        blurb = (getattr(control, "description", "") or "").strip()
+        if not blurb and control.__doc__:
+            blurb = control.__doc__.strip().split("\n", 1)[0].strip()
+        if blurb:
+            self.setToolTip(blurb)
+
         self.setCheckable(True)
         self.setChecked(bool(control.enabled))
 
