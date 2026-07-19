@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QDoubleSpinBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
@@ -356,13 +355,15 @@ def build_param_widget(spec: Param, initial: Any) -> ParamWidget:
     return ParamWidget(spec, initial)
 
 
-class ControlSection(QGroupBox):
-    """One checkable group box per :class:`Control`.
+class ControlSection(QWidget):
+    """One control's dock body: an "Enabled" toggle plus its parameter editors.
 
-    The header checkbox mirrors ``control.enabled``; the body holds one labelled
-    :class:`ParamWidget` per entry in ``control.params()``. Signals bubble the
-    control id alongside the param name/value so the panel and main window stay
-    free of any control-specific knowledge.
+    Each control lives in its own dock titled with the control's name, so the
+    section carries only the enable checkbox and the parameter rows (or a
+    control-supplied custom editor) without repeating that name. When the control
+    is disabled the parameter body greys out, mirroring the old checkable group
+    box. Signals bubble the control id alongside the param name/value so the panel
+    and main window stay free of any control-specific knowledge.
     """
 
     paramChanged = Signal(str, str, object)  # (control_id, name, value)
@@ -370,7 +371,7 @@ class ControlSection(QGroupBox):
     interactionChanged = Signal(bool)  # forwarded slider pressed/released
 
     def __init__(self, control: Control, parent: Optional[QWidget] = None) -> None:
-        super().__init__(control.name, parent)
+        super().__init__(parent)
         self._control = control
         self._param_widgets: Dict[str, ParamWidget] = {}
         self._custom_editor: Optional[QWidget] = None
@@ -384,12 +385,24 @@ class ControlSection(QGroupBox):
         if blurb:
             self.setToolTip(blurb)
 
-        self.setCheckable(True)
-        self.setChecked(bool(control.enabled))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 8)
+        outer.setSpacing(4)
 
-        body = QVBoxLayout(self)
-        body.setContentsMargins(8, 4, 8, 8)
-        body.setSpacing(4)
+        self._enabled_check = QCheckBox("Enabled")
+        self._enabled_check.setChecked(bool(control.enabled))
+        if blurb:
+            self._enabled_check.setToolTip(blurb)
+        self._enabled_check.toggled.connect(self._on_toggled)
+        outer.addWidget(self._enabled_check)
+
+        # Params live in a body widget so the whole group can grey out together
+        # when the control is disabled (as the old checkable group box did).
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(4)
+        self._body = body
 
         editor = control.create_editor()
         if editor is not None:
@@ -399,7 +412,7 @@ class ControlSection(QGroupBox):
             editor.paramChanged.connect(self._on_param_changed)
             if hasattr(editor, "interaction"):
                 editor.interaction.connect(self.interactionChanged)
-            body.addWidget(editor)
+            body_layout.addWidget(editor)
         else:
             for spec in control.params():
                 row = QHBoxLayout()
@@ -417,9 +430,10 @@ class ControlSection(QGroupBox):
                 self._param_widgets[spec.name] = widget
                 row.addWidget(widget, 1)
 
-                body.addLayout(row)
+                body_layout.addLayout(row)
 
-        self.toggled.connect(self._on_toggled)
+        outer.addWidget(body)
+        body.setEnabled(bool(control.enabled))
 
     @property
     def custom_editor(self) -> Optional[QWidget]:
@@ -430,13 +444,16 @@ class ControlSection(QGroupBox):
         self.paramChanged.emit(self._control.id, name, value)
 
     def _on_toggled(self, checked: bool) -> None:
+        self._body.setEnabled(bool(checked))
         self.enabledChanged.emit(self._control.id, bool(checked))
 
     def refresh_from_control(self) -> None:
         """Push the control's current enabled + values back into the widgets."""
-        blocked = self.blockSignals(True)
-        self.setChecked(bool(self._control.enabled))
-        self.blockSignals(blocked)
+        enabled = bool(self._control.enabled)
+        blocked = self._enabled_check.blockSignals(True)
+        self._enabled_check.setChecked(enabled)
+        self._enabled_check.blockSignals(blocked)
+        self._body.setEnabled(enabled)
         if self._custom_editor is not None:
             if hasattr(self._custom_editor, "refresh"):
                 self._custom_editor.refresh()
@@ -445,12 +462,19 @@ class ControlSection(QGroupBox):
             widget.set_value(self._control.get(name))
 
 
-class ControlPanel(QWidget):
-    """Dock contents: one :class:`ControlSection` per pipeline control, in order.
+class ControlPanel(QObject):
+    """Builds one dock per pipeline control and bubbles their signals.
 
-    The build loop is the extensibility proof: it never inspects a concrete
-    control type, only iterates ``pipeline.controls()`` and wires up bubbled
-    signals. Adding a control therefore needs no edits here.
+    Each control becomes its own :class:`QDockWidget` (titled with the control's
+    name, object name ``control_dock_<id>``) so the painter can drag any control
+    to the left or right of the viewport; Qt persists each dock's side through the
+    window's ``saveState``. The build loop is the extensibility proof: it never
+    inspects a concrete control type, only iterates ``pipeline.controls()`` and
+    wires up bubbled signals, so adding a control needs no edits here.
+
+    This is a coordinator, not a single widget. The window asks for the docks via
+    :meth:`docks_in_order` and places them; ``editor``, ``refresh_all`` and
+    ``reset_all`` keep the same contract they had when the panel was one widget.
     """
 
     paramChanged = Signal(str, str, object)  # (control_id, name, value)
@@ -460,25 +484,14 @@ class ControlPanel(QWidget):
     def __init__(
         self,
         pipeline: ControlPipeline,
-        parent: Optional[QWidget] = None,
+        parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self._pipeline = pipeline
         self._sections: List[ControlSection] = []
         self._sections_by_id: Dict[str, ControlSection] = {}
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        outer.addWidget(scroll)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        self._docks: Dict[str, QDockWidget] = {}
+        self._order: List[str] = []
 
         for control in pipeline.controls():
             section = ControlSection(control)
@@ -487,10 +500,21 @@ class ControlPanel(QWidget):
             section.interactionChanged.connect(self.interactionChanged)
             self._sections.append(section)
             self._sections_by_id[control.id] = section
-            layout.addWidget(section)
 
-        layout.addStretch(1)
-        scroll.setWidget(container)
+            dock = QDockWidget(control.name)
+            dock.setObjectName("control_dock_%s" % control.id)
+            dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+            dock.setWidget(section)
+            self._docks[control.id] = dock
+            self._order.append(control.id)
+
+    def dock(self, control_id: str) -> Optional[QDockWidget]:
+        """Return the dock hosting ``control_id`` (``None`` if unknown)."""
+        return self._docks.get(control_id)
+
+    def docks_in_order(self) -> List[Tuple[str, QDockWidget]]:
+        """Return ``(control_id, dock)`` pairs in pipeline order for the window to place."""
+        return [(cid, self._docks[cid]) for cid in self._order]
 
     def editor(self, control_id: str) -> Optional[QWidget]:
         """Return the custom editor widget for ``control_id`` (``None`` if generic/absent).

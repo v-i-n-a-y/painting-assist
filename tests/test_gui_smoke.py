@@ -33,6 +33,20 @@ def main() -> int:
     assert crop_ed is not None and type(crop_ed).__name__ == "CropEditor"
     assert blur_ed is not None and type(blur_ed).__name__ == "BlurEditor"
 
+    # Each control lives in its own dock, split prep-left / colour-right by
+    # default. Dragging a dock to the other side is native Qt and persists via
+    # the window's saveState; here we assert the initial arrangement.
+    from PySide6.QtCore import Qt
+
+    for cid in ("crop", "flip", "grid", "blur", "quantize", "values"):
+        dock = w._panel.dock(cid)
+        assert dock is not None, cid
+        assert dock.objectName() == "control_dock_%s" % cid
+    for cid in ("crop", "flip", "grid"):
+        assert w.dockWidgetArea(w._panel.dock(cid)) == Qt.LeftDockWidgetArea, cid
+    for cid in ("white_balance", "tone", "blur", "quantize", "values", "temp_map"):
+        assert w.dockWidgetArea(w._panel.dock(cid)) == Qt.RightDockWidgetArea, cid
+
     # Load a synthetic reference.
     img = (np.random.rand(240, 320, 3) * 255).astype(np.uint8)
     w._model.set_image(img, "synthetic.png")

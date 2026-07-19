@@ -81,6 +81,11 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 _SETTINGS_ORG = "Vinay"
 _SETTINGS_APP = "Painting Assist"
 
+# Bumped whenever the dock layout changes shape so a saved arrangement from an
+# older version (e.g. the single "Controls" dock) is ignored and the new default
+# split is shown instead, rather than restoring a layout that no longer fits.
+_LAYOUT_VERSION = 2
+
 # Maps a chosen save filter to the extension to append when the user's path has
 # none (so a bare "portrait" saves as "portrait.png" rather than a raw file).
 _FILTER_EXT = {
@@ -149,13 +154,8 @@ class MainWindow(QMainWindow):
         self._panel = ControlPanel(self._pipeline)
         self._renderer = RenderController(self._pipeline, self._model.original)
 
-        # ---- dock ----
-        dock = QDockWidget("Controls", self)
-        dock.setObjectName("controls_dock")
-        dock.setWidget(self._panel)
-        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
-        self._dock = dock
+        # ---- per-control docks (each draggable to the left or right) ----
+        self._install_control_docks()
 
         # ---- palette dock (swatches from the Colour groups control) ----
         self._palette_panel = PalettePanel()
@@ -310,7 +310,7 @@ class MainWindow(QMainWindow):
             ]
         )
 
-        # Minimum size so the three docks and viewport can't be crushed.
+        # Minimum size so the docks and viewport can't be crushed.
         self.setMinimumSize(900, 600)
 
         # ---- restore persisted window + control session (built UI first) ----
@@ -321,6 +321,32 @@ class MainWindow(QMainWindow):
         # Baseline for undo/redo: the just-restored state, with empty history.
         self._committed_state = self._capture_state()
         self._update_undo_actions()
+
+    # ------------------------------------------------------------------ #
+    # Control docks
+    # ------------------------------------------------------------------ #
+    def _install_control_docks(self) -> None:
+        """Give every control its own dock, split prep-left / colour-right.
+
+        Composition and geometry controls (crop, flip, grid) start on the left;
+        the tone and colour controls start on the right. Each dock is freely
+        draggable between the two sides, and its placement is remembered across
+        sessions via the window's saved state, so this default only applies until
+        the painter rearranges the docks (or on a layout-version bump).
+        """
+        left_ids = {"crop", "flip", "grid"}
+        self._control_docks: list = []
+        # The last dock placed on each side, so the next one stacks beneath it.
+        previous = {Qt.LeftDockWidgetArea: None, Qt.RightDockWidgetArea: None}
+        for cid, dock in self._panel.docks_in_order():
+            area = Qt.LeftDockWidgetArea if cid in left_ids else Qt.RightDockWidgetArea
+            prev = previous[area]
+            if prev is None:
+                self.addDockWidget(area, dock)
+            else:
+                self.splitDockWidget(prev, dock, Qt.Vertical)
+            previous[area] = dock
+            self._control_docks.append(dock)
 
     # ------------------------------------------------------------------ #
     # Toolbar / menu
@@ -500,7 +526,9 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self._reset_action)
 
         view_menu = self.menuBar().addMenu("View")
-        view_menu.addAction(self._dock.toggleViewAction())
+        controls_menu = view_menu.addMenu("Controls")
+        for dock in self._control_docks:
+            controls_menu.addAction(dock.toggleViewAction())
         view_menu.addAction(self._palette_dock.toggleViewAction())
         view_menu.addAction(self._histogram_dock.toggleViewAction())
         view_menu.addSeparator()
@@ -1737,8 +1765,15 @@ class MainWindow(QMainWindow):
         geometry = settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
+        # Only restore the saved dock arrangement if it was written by this
+        # layout version; otherwise keep the fresh prep-left / colour-right split
+        # rather than a stale layout from an older dock shape.
         state = settings.value("window/state")
-        if state is not None:
+        try:
+            saved_layout = int(settings.value("window/layout_version") or 0)
+        except (TypeError, ValueError):
+            saved_layout = 0
+        if state is not None and saved_layout == _LAYOUT_VERSION:
             self.restoreState(state)
 
         raw = settings.value("session/controls")
@@ -1795,6 +1830,7 @@ class MainWindow(QMainWindow):
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/state", self.saveState())
+        settings.setValue("window/layout_version", _LAYOUT_VERSION)
 
         states = {
             control.id: control.to_state() for control in self._pipeline.controls()
