@@ -25,6 +25,7 @@ from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDockWidget,
     QFileDialog,
     QInputDialog,
@@ -47,6 +48,7 @@ from painting_assist import (
 from painting_assist.controls import registry
 from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
+from painting_assist.measure import DISPLAY_UNITS, Calibration
 from painting_assist.pipeline import ControlPipeline
 from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
@@ -253,6 +255,12 @@ class MainWindow(QMainWindow):
             settings.value("settings/paints") or "[]"
         )
 
+        # ---- measure-tool display settings (remembered across sessions) ----
+        self._measure_unit = str(settings.value("settings/measure_unit", "cm"))
+        if self._measure_unit not in DISPLAY_UNITS:
+            self._measure_unit = "cm"
+        self._measure_edges = settings.value("settings/measure_edges", True, type=bool)
+
         # ---- update checker (off-thread; signals land on the GUI thread) ----
         self._updater = updater.UpdateChecker(__version__, self)
         self._updater.updateAvailable.connect(self._on_update_available)
@@ -318,6 +326,7 @@ class MainWindow(QMainWindow):
         # ---- restore persisted window + control session (built UI first) ----
         self._restore_session()
         self._update_grid_overlay()
+        self._update_measure_calibration()
         self._apply_update_schedule()
 
         # Baseline for undo/redo: the just-restored state, with empty history.
@@ -464,6 +473,37 @@ class MainWindow(QMainWindow):
         self._reset_action.setStatusTip("Reset all controls (keeps the image)")
         self._reset_action.triggered.connect(self._on_reset)
         toolbar.addAction(self._reset_action)
+
+        # Measure-tool strip: unit picker and edge-distance toggle, shown only
+        # while a measure tool is active (see _set_measure_strip_visible).
+        self._measure_strip: list = []
+        measure_label = QLabel("Measure:")
+        self._measure_unit_combo = QComboBox()
+        for unit in DISPLAY_UNITS:
+            self._measure_unit_combo.addItem(unit, unit)
+        idx = self._measure_unit_combo.findData(self._measure_unit)
+        if idx >= 0:
+            self._measure_unit_combo.setCurrentIndex(idx)
+        self._measure_unit_combo.setToolTip(
+            "Units for the caliper/guides readouts (uses the Canvas & Crop size)"
+        )
+        self._measure_unit_combo.currentIndexChanged.connect(
+            self._on_measure_unit_changed
+        )
+        self._measure_edges_check = QCheckBox("Edge distances")
+        self._measure_edges_check.setToolTip(
+            "Show each caliper point's distance to the nearest vertical/horizontal edge"
+        )
+        self._measure_edges_check.setChecked(bool(self._measure_edges))
+        self._measure_edges_check.toggled.connect(self._on_measure_edges_changed)
+        for widget in (
+            measure_label,
+            self._measure_unit_combo,
+            self._measure_edges_check,
+        ):
+            self.statusBar().addPermanentWidget(widget)
+            widget.setVisible(False)
+            self._measure_strip.append(widget)
 
         # Permanent right-side status-bar labels: render activity and zoom level.
         self._busy_label = QLabel("")
@@ -1288,6 +1328,7 @@ class MainWindow(QMainWindow):
                 act.setChecked(False)
                 act.blockSignals(False)
         self._view.set_measure_mode(mode)
+        self._set_measure_strip_visible(True)
         self.statusBar().showMessage(
             "Drag the handles on the image to measure; click the tool again to finish.",
             5000,
@@ -1301,10 +1342,56 @@ class MainWindow(QMainWindow):
                 act.setChecked(False)
                 act.blockSignals(False)
         self._view.set_measure_mode(None)
+        self._set_measure_strip_visible(False)
 
     def _on_measure_changed(self, readout: str) -> None:
         """Show the active measure tool's live readout in the status bar."""
         self.statusBar().showMessage(readout)
+
+    # -- measure units / edge distances (status-bar strip) --------------- #
+    def _set_measure_strip_visible(self, visible: bool) -> None:
+        """Show or hide the unit/edge-distance strip (only while measuring)."""
+        for widget in self._measure_strip:
+            widget.setVisible(visible)
+
+    def _measure_calibration(self) -> Calibration:
+        """Build the canvas calibration from the Canvas & Crop size + the strip."""
+        canvas_w = canvas_h = 0.0
+        canvas_unit = "px"
+        if self._crop_control is not None:
+            try:
+                canvas_w = float(self._crop_control.get("canvas_w"))
+                canvas_h = float(self._crop_control.get("canvas_h"))
+                canvas_unit = str(self._crop_control.get("unit"))
+            except (TypeError, ValueError, KeyError):
+                pass
+        return Calibration(
+            canvas_w=canvas_w,
+            canvas_h=canvas_h,
+            canvas_unit=canvas_unit,
+            display_unit=self._measure_unit,
+            show_edges=bool(self._measure_edges),
+        )
+
+    def _update_measure_calibration(self) -> None:
+        """Push a fresh calibration to the view's measure tools."""
+        self._view.set_measure_calibration(self._measure_calibration())
+
+    def _on_measure_unit_changed(self, _index: int) -> None:
+        """Persist the chosen measure unit and re-calibrate the tools."""
+        self._measure_unit = str(self._measure_unit_combo.currentData())
+        QSettings(_SETTINGS_ORG, _SETTINGS_APP).setValue(
+            "settings/measure_unit", self._measure_unit
+        )
+        self._update_measure_calibration()
+
+    def _on_measure_edges_changed(self, checked: bool) -> None:
+        """Persist the edge-distance toggle and re-calibrate the tools."""
+        self._measure_edges = bool(checked)
+        QSettings(_SETTINGS_ORG, _SETTINGS_APP).setValue(
+            "settings/measure_edges", self._measure_edges
+        )
+        self._update_measure_calibration()
 
     # ------------------------------------------------------------------ #
     # Viewer feedback + async load
@@ -1530,6 +1617,9 @@ class MainWindow(QMainWindow):
     def _on_param(self, cid: str, name: str, value: object) -> None:
         """A param value changed: update the pipeline and request a render."""
         self._pipeline.set_value(cid, name, value)
+        if cid == "crop" and name in ("canvas_w", "canvas_h", "unit"):
+            # The canvas size/unit drives the physical measure-tool readouts.
+            self._update_measure_calibration()
         if cid == "grid":
             # The grid is a viewer overlay, not a pipeline stage — repaint the
             # overlay directly; no render needed.

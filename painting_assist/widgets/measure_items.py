@@ -30,6 +30,8 @@ from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsObject
 
+from painting_assist.measure import Calibration
+
 
 # --------------------------------------------------------------------------- #
 # Pure geometry helpers (unit-tested; no GUI required)
@@ -101,6 +103,8 @@ class _MeasureItem(QGraphicsObject):
         super().__init__(parent)
         self._image_rect = QRectF(image_rect)
         self._drag: Optional[str] = None
+        # Canvas calibration for physical-unit readouts; default is pixel-only.
+        self._cal = Calibration()
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.LeftButton)
         # Above the grid (z=500), below the crop item (z=1000).
@@ -131,6 +135,11 @@ class _MeasureItem(QGraphicsObject):
         self.prepareGeometryChange()
         self._image_rect = QRectF(image_rect)
         self._reclamp()
+        self.update()
+
+    def set_calibration(self, cal: Calibration) -> None:
+        """Set the canvas calibration used to format readouts, then repaint."""
+        self._cal = cal
         self.update()
 
     # -- subclass hooks ---------------------------------------------------- #
@@ -228,16 +237,18 @@ class _MeasureItem(QGraphicsObject):
         """Scene point the primary readout label is anchored near."""
         raise NotImplementedError
 
-    def label_specs(self) -> List[Tuple[QPointF, str]]:
-        """Return ``(scene_anchor, text)`` labels for the view to draw.
+    def label_specs(self) -> List[Tuple[QPointF, str, str]]:
+        """Return ``(scene_anchor, text, placement)`` labels for the view to draw.
 
-        The view paints these in its foreground layer (device coordinates) so a
-        label is never clipped to this item's bounding rect. Drawing labels in
-        ``paint()`` used to leave trails when the tool moved and clip the text off
-        the top edge; the view repaints the whole viewport on any change, so
-        moving is clean and labels stay on-screen.
+        ``placement`` is ``"above"`` or ``"below"`` — which side of the anchor the
+        chip sits, so a point can carry both a reading above and an edge chip
+        below without overlap. The view paints these in its foreground layer
+        (device coordinates) so a label is never clipped to this item's bounding
+        rect. Drawing labels in ``paint()`` used to leave trails when the tool
+        moved and clip the text off the top edge; the view repaints the whole
+        viewport on any change, so moving is clean and labels stay on-screen.
         """
-        return [(self._label_anchor(), self.readout())]
+        return [(self._label_anchor(), self.readout(), "above")]
 
 
 class AngleGaugeItem(_MeasureItem):
@@ -325,18 +336,47 @@ class CaliperItem(_MeasureItem):
         self._b0 = self._clamp(self._b0)
         self._b1 = self._clamp(self._b1)
 
-    def _len_a(self) -> float:
-        return QLineF(self._a0, self._a1).length()
-
-    def _len_b(self) -> float:
-        return QLineF(self._b0, self._b1).length()
+    def _seg(self, p0: QPointF, p1: QPointF) -> Tuple[str, float]:
+        """Return the ``(formatted, numeric)`` length of a segment in the unit."""
+        r = self._image_rect
+        dx, dy = p1.x() - p0.x(), p1.y() - p0.y()
+        return (
+            self._cal.length_str(dx, dy, r.width(), r.height()),
+            self._cal.length_value(dx, dy, r.width(), r.height()),
+        )
 
     def readout(self) -> str:
-        la, lb = self._len_a(), self._len_b()
-        return f"A {la:.0f} px : B {lb:.0f} px  ({ratio_string(la, lb)})"
+        sa, va = self._seg(self._a0, self._a1)
+        sb, vb = self._seg(self._b0, self._b1)
+        return f"A {sa} : B {sb}  ({ratio_string(va, vb)})"
 
     def _label_anchor(self) -> QPointF:
-        return self._a1
+        # Main length/ratio label sits at segment A's midpoint so it never
+        # collides with the per-endpoint edge chips drawn below each point.
+        return QPointF(
+            (self._a0.x() + self._a1.x()) / 2.0, (self._a0.y() + self._a1.y()) / 2.0
+        )
+
+    def _edge_label(self, p: QPointF) -> str:
+        r = self._image_rect
+        return self._cal.edge_label(
+            p.x(),
+            p.y(),
+            r.left(),
+            r.top(),
+            r.right(),
+            r.bottom(),
+            r.width(),
+            r.height(),
+        )
+
+    def label_specs(self) -> List[Tuple[QPointF, str, str]]:
+        specs = [(self._label_anchor(), self.readout(), "above")]
+        if self._cal.show_edges:
+            # Each endpoint's distance to its nearest vertical/horizontal edge.
+            for p in (self._a0, self._a1, self._b0, self._b1):
+                specs.append((p, self._edge_label(p), "below"))
+        return specs
 
     def boundingRect(self) -> QRectF:
         m = (self.HANDLE_PX + self.GRAB_PX) / self._scale() + 2.0
@@ -408,7 +448,10 @@ class GuidesItem(_MeasureItem):
         self._hy = min(max(self._hy, r.top()), r.bottom())
 
     def readout(self) -> str:
-        return f"Plumb x={self._vx:.0f} px   Horizon y={self._hy:.0f} px"
+        r = self._image_rect
+        x = self._cal.axis_str(self._vx - r.left(), "x", r.width(), r.height())
+        y = self._cal.axis_str(self._hy - r.top(), "y", r.width(), r.height())
+        return f"Plumb {x} from left   Horizon {y} from top"
 
     def _label_anchor(self) -> QPointF:
         return QPointF(self._vx, self._hy)

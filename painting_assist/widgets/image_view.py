@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from painting_assist.measure import Calibration
 from painting_assist.utils.image_qt import ndarray_to_qpixmap
 from painting_assist.widgets.crop_item import CropItem
 from painting_assist.widgets.measure_items import (
@@ -226,6 +227,8 @@ class ImageView(QGraphicsView):
         # visible at a time (see set_measure_mode).
         self._measure_items: Dict[str, QGraphicsItem] = {}
         self._measure_mode: Optional[str] = None
+        # Canvas calibration pushed to every measure item for physical readouts.
+        self._measure_cal = Calibration()
 
         # Non-destructive grid overlay, drawn above the pixmap.
         self._grid_item = GridOverlayItem()
@@ -439,6 +442,7 @@ class ImageView(QGraphicsView):
             "guides": GuidesItem,
         }[mode]
         item = factory(scene_rect)
+        item.set_calibration(self._measure_cal)
         item.changed.connect(self.measureChanged)
         # Repaint the whole viewport on any change so the foreground label is
         # redrawn from scratch (never leaving a trail where it used to be).
@@ -446,6 +450,22 @@ class ImageView(QGraphicsView):
         self._scene.addItem(item)
         self._measure_items[mode] = item
         return item
+
+    def set_measure_calibration(self, cal: Calibration) -> None:
+        """Push a new canvas calibration to every measure tool and refresh.
+
+        Updates the physical-unit readouts live: existing items re-format, the
+        foreground labels repaint, and the active tool's status-bar readout is
+        re-emitted so the window's status line updates immediately.
+        """
+        self._measure_cal = cal
+        for item in self._measure_items.values():
+            item.set_calibration(cal)
+        self.viewport().update()
+        if self._measure_mode is not None:
+            item = self._measure_items.get(self._measure_mode)
+            if item is not None:
+                self.measureChanged.emit(item.readout())
 
     # ------------------------------------------------------------------ #
     # Eyedropper
@@ -580,19 +600,25 @@ class ImageView(QGraphicsView):
         painter.setRenderHint(QPainter.Antialiasing, True)
         fm = QFontMetrics(painter.font())
         vp_rect = self.viewport().rect()
-        for anchor, text in specs:
+        for anchor, text, place in specs:
             vp = self.mapFromScene(item.mapToScene(anchor))
-            self._paint_measure_label(painter, fm, vp.x(), vp.y(), str(text), vp_rect)
+            self._paint_measure_label(
+                painter, fm, vp.x(), vp.y(), str(text), vp_rect, place
+            )
         painter.restore()
 
     @staticmethod
-    def _paint_measure_label(painter, fm, ax, ay, text, vp_rect) -> None:
-        """Draw one label chip near ``(ax, ay)``, clamped inside ``vp_rect``."""
+    def _paint_measure_label(painter, fm, ax, ay, text, vp_rect, place="above") -> None:
+        """Draw one label chip near ``(ax, ay)``, clamped inside ``vp_rect``.
+
+        ``place`` puts the chip ``"above"`` or ``"below"`` the anchor so a point
+        can carry a reading above and an edge chip below without overlapping.
+        """
         pad = 3
         w = fm.horizontalAdvance(text) + 2 * pad
         h = fm.height() + 2 * pad
         x = ax + 10
-        y = ay - 10 - h
+        y = ay + 10 if place == "below" else ay - 10 - h
         # Keep the whole chip on-screen even when the anchor is near an edge.
         x = min(
             max(x, vp_rect.left() + 1), max(vp_rect.left() + 1, vp_rect.right() - w)
