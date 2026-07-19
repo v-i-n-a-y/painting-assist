@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -112,13 +113,24 @@ class PaintsDialog(QDialog):
         self._add_item(name, rgb)
 
     def _add_from_catalogue(self) -> None:
-        names = [name for name, _rgb in DEFAULT_CATALOGUE]
+        # Only offer catalogue colours the painter does not already own (compared
+        # by name, case-insensitively), so an added colour drops off the list.
+        owned = {self._list.item(i).text().lower() for i in range(self._list.count())}
+        available = [
+            (name, rgb) for name, rgb in DEFAULT_CATALOGUE if name.lower() not in owned
+        ]
+        if not available:
+            QMessageBox.information(
+                self, "My Paints", "You already have every catalogue colour."
+            )
+            return
+        names = [name for name, _rgb in available]
         name, ok = QInputDialog.getItem(
             self, "Add from catalogue", "Pigment:", names, 0, False
         )
         if not ok or not name:
             return
-        for cat_name, rgb in DEFAULT_CATALOGUE:
+        for cat_name, rgb in available:
             if cat_name == name:
                 self._add_item(cat_name, tuple(int(c) for c in rgb))
                 return

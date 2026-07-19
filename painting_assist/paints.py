@@ -128,6 +128,7 @@ DEFAULT_CATALOGUE: list[tuple[str, tuple[int, int, int]]] = [
     # --- Greens ----------------------------------------------------------
     ("Phthalo Green", (0, 110, 95)),
     ("Phthalo Green Yellow Shade", (20, 120, 80)),
+    ("Prussian Green", (20, 85, 75)),
     ("Viridian", (30, 115, 95)),
     ("Emerald Green", (30, 150, 110)),
     ("Cobalt Green", (60, 140, 110)),
