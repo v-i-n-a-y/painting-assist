@@ -161,6 +161,46 @@ def build_palette(theme: str) -> QPalette:
     return dark_palette() if theme == "dark" else light_palette()
 
 
+# Dock chrome colours per concrete theme: a visible line on the splitter between
+# docked panels and a tinted, underlined title bar, so stacked control panels
+# read as distinct panels. Picked explicitly because our palettes don't set the
+# derived shading roles (Mid/Dark/Shadow) a ``palette(...)`` QSS ref would need.
+_CHROME = {
+    "light": {"line": "#b4b4b4", "title": "#e2e2e2", "hover": "#8f8f8f"},
+    "dark": {"line": "#141414", "title": "#383838", "hover": "#4a4a4a"},
+}
+
+
+def dock_chrome_qss(theme: str) -> str:
+    """App-wide stylesheet that delineates docked panels for a concrete theme.
+
+    Styles only dock chrome (the splitter separators between docks and each
+    dock's title bar), leaving the palette-driven Fusion look of everything else
+    untouched, so stacked control docks are easy to tell apart.
+    """
+    colours = _CHROME["dark"] if theme == "dark" else _CHROME["light"]
+    return (
+        "QMainWindow::separator { background: %(line)s; width: 2px; height: 2px; }"
+        "QMainWindow::separator:hover { background: %(hover)s; }"
+        "QDockWidget::title {"
+        " background: %(title)s; padding: 5px 8px;"
+        " border-bottom: 1px solid %(line)s; }"
+    ) % colours
+
+
+def _apply_concrete(app: QGuiApplication, theme: str) -> None:
+    """Apply a concrete theme's palette and dock-chrome stylesheet to *app*.
+
+    The single choke point every theme path funnels through (startup, a manual
+    switch and a live OS colour-scheme flip) so the palette and the dock chrome
+    never drift apart.
+    """
+    app.setPalette(build_palette(theme))
+    # setStyleSheet is a QApplication (QWidget) API; QGuiApplication lacks it.
+    if hasattr(app, "setStyleSheet"):
+        app.setStyleSheet(dock_chrome_qss(theme))
+
+
 def _disconnect_system() -> None:
     """Tear down any live "system" colour-scheme subscription."""
     global _system_connection
@@ -190,7 +230,7 @@ def _connect_system(app: QGuiApplication) -> None:
         return
 
     def _on_scheme_changed(scheme):
-        app.setPalette(build_palette(resolve_mode("system", scheme)))
+        _apply_concrete(app, resolve_mode("system", scheme))
 
     signal.connect(_on_scheme_changed)
     _system_connection = (app, _on_scheme_changed)
@@ -215,7 +255,7 @@ def apply_theme(app: QGuiApplication, mode: str) -> str:
         _disconnect_system()
         theme = resolve_mode(mode, None)
 
-    app.setPalette(build_palette(theme))
+    _apply_concrete(app, theme)
     return theme
 
 

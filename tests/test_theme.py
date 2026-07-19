@@ -110,6 +110,24 @@ def test_palettes_are_fresh_each_call():
     assert p2.color(QPalette.ColorRole.Window).name().lower() == "#2b2b2b"
 
 
+# ---- dock chrome stylesheet ----
+def test_dock_chrome_qss_targets_dock_chrome_only():
+    # Both themes style the separators and the dock title, and nothing broader
+    # (so the palette-driven look of other widgets is left alone).
+    for mode in ("light", "dark"):
+        qss = theme.dock_chrome_qss(mode)
+        assert isinstance(qss, str) and qss
+        assert "QMainWindow::separator" in qss
+        assert "QDockWidget::title" in qss
+
+
+def test_dock_chrome_qss_differs_by_theme():
+    # The line/title colours are theme-specific, so the two stylesheets differ.
+    assert theme.dock_chrome_qss("light") != theme.dock_chrome_qss("dark")
+    # Anything not "dark" falls back to the light chrome.
+    assert theme.dock_chrome_qss("anything") == theme.dock_chrome_qss("light")
+
+
 def test_all_dark_roles_present():
     # Guard against a partial palette: every role we promise is set and the
     # disabled group covers the common-miss roles.
