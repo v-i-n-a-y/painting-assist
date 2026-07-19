@@ -9,6 +9,7 @@ from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
+    QFontMetrics,
     QPainter,
     QPainterPath,
     QPalette,
@@ -406,6 +407,7 @@ class ImageView(QGraphicsView):
 
         if mode is None:
             self._measure_mode = None
+            self.viewport().update()  # clear the foreground label of the old tool
             if not self._crop_editing and not self._eyedropper:
                 self.setDragMode(QGraphicsView.ScrollHandDrag)
             return
@@ -417,6 +419,7 @@ class ImageView(QGraphicsView):
         item.show()
         self._measure_mode = mode
         self.setDragMode(QGraphicsView.NoDrag)
+        self.viewport().update()  # draw the tool's label at its start position
         self.measureChanged.emit(item.readout())
 
     def measure_mode(self) -> Optional[str]:
@@ -437,6 +440,9 @@ class ImageView(QGraphicsView):
         }[mode]
         item = factory(scene_rect)
         item.changed.connect(self.measureChanged)
+        # Repaint the whole viewport on any change so the foreground label is
+        # redrawn from scratch (never leaving a trail where it used to be).
+        item.changed.connect(lambda _text: self.viewport().update())
         self._scene.addItem(item)
         self._measure_items[mode] = item
         return item
@@ -532,6 +538,7 @@ class ImageView(QGraphicsView):
         while ``_has_image`` is false — the first loaded image hides it for good.
         """
         super().drawForeground(painter, rect)
+        self._draw_measure_labels(painter)
         if self._has_image or not self._placeholder_lines:
             return
         painter.save()
@@ -549,3 +556,50 @@ class ImageView(QGraphicsView):
             "\n".join(self._placeholder_lines),
         )
         painter.restore()
+
+    # ------------------------------------------------------------------ #
+    # Measure-tool labels (drawn in the foreground, never clipped/trailed)
+    # ------------------------------------------------------------------ #
+    def _draw_measure_labels(self, painter: QPainter) -> None:
+        """Paint the active measure tool's labels in viewport coordinates.
+
+        Drawing here (rather than in each item's ``paint``) means labels are not
+        clipped to the item's bounding rect, and because the whole viewport is
+        repainted on every change they never leave a trail when the tool moves.
+        """
+        if self._measure_mode is None:
+            return
+        item = self._measure_items.get(self._measure_mode)
+        if item is None or not item.isVisible():
+            return
+        specs = item.label_specs()
+        if not specs:
+            return
+        painter.save()
+        painter.setWorldMatrixEnabled(False)  # device (viewport) coordinates
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        fm = QFontMetrics(painter.font())
+        vp_rect = self.viewport().rect()
+        for anchor, text in specs:
+            vp = self.mapFromScene(item.mapToScene(anchor))
+            self._paint_measure_label(painter, fm, vp.x(), vp.y(), str(text), vp_rect)
+        painter.restore()
+
+    @staticmethod
+    def _paint_measure_label(painter, fm, ax, ay, text, vp_rect) -> None:
+        """Draw one label chip near ``(ax, ay)``, clamped inside ``vp_rect``."""
+        pad = 3
+        w = fm.horizontalAdvance(text) + 2 * pad
+        h = fm.height() + 2 * pad
+        x = ax + 10
+        y = ay - 10 - h
+        # Keep the whole chip on-screen even when the anchor is near an edge.
+        x = min(
+            max(x, vp_rect.left() + 1), max(vp_rect.left() + 1, vp_rect.right() - w)
+        )
+        y = min(max(y, vp_rect.top() + 1), max(vp_rect.top() + 1, vp_rect.bottom() - h))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 170))
+        painter.drawRect(QRectF(x, y, w, h))
+        painter.setPen(QColor(255, 255, 255, 240))
+        painter.drawText(int(x + pad), int(y + pad + fm.ascent()), text)

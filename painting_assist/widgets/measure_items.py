@@ -24,10 +24,10 @@ as ``ImageView.measureChanged`` for the status bar.
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsObject
 
 
@@ -223,27 +223,21 @@ class _MeasureItem(QGraphicsObject):
         for c in points.values():
             painter.drawRect(QRectF(c.x() - hs, c.y() - hs, 2 * hs, 2 * hs))
 
-    def _draw_label(self, painter: QPainter, anchor: QPointF, text: str) -> None:
-        """Draw ``text`` at constant on-screen size near a scene ``anchor``."""
-        scene = self.scene()
-        views = scene.views() if scene is not None else []
-        if not views:
-            return
-        vp = views[0].mapFromScene(self.mapToScene(anchor))
-        painter.save()
-        painter.setWorldMatrixEnabled(False)  # draw in device (viewport) coords
-        fm = QFontMetrics(painter.font())
-        pad = 3
-        w = fm.horizontalAdvance(text) + 2 * pad
-        h = fm.height() + 2 * pad
-        x = vp.x() + 10
-        y = vp.y() - 10 - h
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 170))
-        painter.drawRect(QRectF(x, y, w, h))
-        painter.setPen(QColor(255, 255, 255, 240))
-        painter.drawText(int(x + pad), int(y + pad + fm.ascent()), text)
-        painter.restore()
+    # -- labels (positioned here, painted by the view) --------------------- #
+    def _label_anchor(self) -> QPointF:
+        """Scene point the primary readout label is anchored near."""
+        raise NotImplementedError
+
+    def label_specs(self) -> List[Tuple[QPointF, str]]:
+        """Return ``(scene_anchor, text)`` labels for the view to draw.
+
+        The view paints these in its foreground layer (device coordinates) so a
+        label is never clipped to this item's bounding rect. Drawing labels in
+        ``paint()`` used to leave trails when the tool moved and clip the text off
+        the top edge; the view repaints the whole viewport on any change, so
+        moving is clean and labels stay on-screen.
+        """
+        return [(self._label_anchor(), self.readout())]
 
 
 class AngleGaugeItem(_MeasureItem):
@@ -279,6 +273,9 @@ class AngleGaugeItem(_MeasureItem):
     def readout(self) -> str:
         return f"Angle: {angle_of(self._pivot, self._end):.1f} deg"
 
+    def _label_anchor(self) -> QPointF:
+        return self._pivot
+
     def boundingRect(self) -> QRectF:
         m = (self.HANDLE_PX + self.GRAB_PX) / self._scale() + 2.0
         return QRectF(self._pivot, self._end).normalized().adjusted(-m, -m, m, m)
@@ -297,7 +294,6 @@ class AngleGaugeItem(_MeasureItem):
         painter.setPen(self._cosmetic_pen(self._COLOR, 2.0))
         painter.drawLine(QLineF(self._pivot, self._end))
         self._draw_handles(painter, self._COLOR, self._handles())
-        self._draw_label(painter, self._pivot, self.readout())
 
 
 class CaliperItem(_MeasureItem):
@@ -339,6 +335,9 @@ class CaliperItem(_MeasureItem):
         la, lb = self._len_a(), self._len_b()
         return f"A {la:.0f} px : B {lb:.0f} px  ({ratio_string(la, lb)})"
 
+    def _label_anchor(self) -> QPointF:
+        return self._a1
+
     def boundingRect(self) -> QRectF:
         m = (self.HANDLE_PX + self.GRAB_PX) / self._scale() + 2.0
         pts = [self._a0, self._a1, self._b0, self._b1]
@@ -356,7 +355,6 @@ class CaliperItem(_MeasureItem):
         painter.drawLine(QLineF(self._b0, self._b1))
         self._draw_handles(painter, self._COLOR_A, {"a0": self._a0, "a1": self._a1})
         self._draw_handles(painter, self._COLOR_B, {"b0": self._b0, "b1": self._b1})
-        self._draw_label(painter, self._a1, self.readout())
 
 
 class GuidesItem(_MeasureItem):
@@ -412,6 +410,9 @@ class GuidesItem(_MeasureItem):
     def readout(self) -> str:
         return f"Plumb x={self._vx:.0f} px   Horizon y={self._hy:.0f} px"
 
+    def _label_anchor(self) -> QPointF:
+        return QPointF(self._vx, self._hy)
+
     def boundingRect(self) -> QRectF:
         return QRectF(self._image_rect)
 
@@ -421,4 +422,3 @@ class GuidesItem(_MeasureItem):
         painter.setPen(self._cosmetic_pen(self._COLOR, 2.0))
         painter.drawLine(QLineF(self._vx, r.top(), self._vx, r.bottom()))
         painter.drawLine(QLineF(r.left(), self._hy, r.right(), self._hy))
-        self._draw_label(painter, QPointF(self._vx, self._hy), self.readout())
