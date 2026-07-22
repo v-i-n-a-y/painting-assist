@@ -7,11 +7,18 @@ edits that list and hands it back via :meth:`paints`; persistence (QSettings)
 lives in the main window, keeping this widget a self-contained editor. Tubes can
 be entered by hand (name plus a colour picked from the system colour dialog) or
 chosen from a built-in catalogue of common artist pigments.
+
+Each tube also carries a tick controlling whether it appears in the
+Monochromatic value-mode colour picker, so a painter with a large inventory can
+keep that dropdown down to the few colours they actually underpaint with. The
+set of hidden tube names is reported separately via :meth:`mono_hidden` (the
+``(name, rgb)`` list from :meth:`paints` is unchanged, so nothing downstream that
+consumes the inventory has to care about the flag).
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
@@ -21,6 +28,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -48,16 +56,25 @@ class PaintsDialog(QDialog):
         self,
         paints: Optional[List[Tuple[str, RGB]]] = None,
         parent: Optional[QWidget] = None,
+        mono_hidden: Optional[Set[str]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("My Paints")
         self.setModal(True)
-        self.resize(360, 420)
+        self.resize(360, 460)
+
+        hidden = {str(n) for n in (mono_hidden or set())}
+
+        hint = QLabel(
+            "Tick a paint to include it in the Monochromatic mode colour picker."
+        )
+        hint.setWordWrap(True)
 
         self._list = QListWidget()
         self._list.setIconSize(QSize(24, 24))
         for name, rgb in paints or []:
-            self._add_item(str(name), tuple(int(c) for c in rgb))
+            name = str(name)
+            self._add_item(name, tuple(int(c) for c in rgb), name not in hidden)
         self._list.itemDoubleClicked.connect(lambda _item: self._edit_selected())
 
         add_btn = QPushButton("Add…")
@@ -83,15 +100,19 @@ class PaintsDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(hint)
         layout.addLayout(row, 1)
         layout.addWidget(buttons)
 
     # ------------------------------------------------------------------ #
     # List helpers
     # ------------------------------------------------------------------ #
-    def _add_item(self, name: str, rgb: RGB) -> None:
+    def _add_item(self, name: str, rgb: RGB, show_mono: bool = True) -> None:
         item = QListWidgetItem(_swatch_icon(rgb), name)
         item.setData(Qt.UserRole, rgb)
+        item.setToolTip("Ticked: shown in the Monochromatic mode colour picker")
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked if show_mono else Qt.Unchecked)
         self._list.addItem(item)
 
     def _pick_colour(self, initial: RGB) -> Optional[RGB]:
@@ -168,3 +189,11 @@ class PaintsDialog(QDialog):
             rgb = item.data(Qt.UserRole)
             out.append((item.text(), (int(rgb[0]), int(rgb[1]), int(rgb[2]))))
         return out
+
+    def mono_hidden(self) -> Set[str]:
+        """Return the names of tubes unticked for the Monochromatic colour picker."""
+        return {
+            self._list.item(i).text()
+            for i in range(self._list.count())
+            if self._list.item(i).checkState() != Qt.Checked
+        }

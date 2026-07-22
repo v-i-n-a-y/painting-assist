@@ -40,12 +40,16 @@ def main() -> int:
     n_before = len(w._paints)
     w._pipeline.control("values").set("mono_hex", "#123456")
     values_ed.refresh()  # combo now shows a "Custom (#123456)" entry, selected
-    values_ed._paints = list(w._paints) + [("Studio umber", (90, 60, 40))]
-    values_ed.paintsChanged.emit(values_ed._paints)
+    values_ed.paintAdded.emit("Studio umber", (90, 60, 40))
     assert len(w._paints) == n_before + 1
     assert w._paints[-1] == ("Studio umber", (90, 60, 40))
-    # Editing My Paints via the window pushes the fresh list into the picker.
-    w._values_editor.set_paints(w._paints)
+
+    # Hiding a paint from the mono picker: the window filters it out of the list
+    # pushed into the editor, but keeps it in the full inventory for mixing.
+    w._mono_hidden = {"Studio umber"}
+    visible = w._visible_mono_paints()
+    assert ("Studio umber", (90, 60, 40)) not in visible
+    assert ("Studio umber", (90, 60, 40)) in w._paints
 
     # Each control lives in its own dock, split prep-left / colour-right by
     # default. Dragging a dock to the other side is native Qt and persists via

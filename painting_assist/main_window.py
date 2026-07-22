@@ -259,11 +259,15 @@ class MainWindow(QMainWindow):
         self._paints = paints.paints_from_json(
             settings.value("settings/paints") or "[]"
         )
-        # Feed the inventory into the Values mono-colour picker and persist any
-        # colour the painter saves from there back to the same store.
+        # Names of paints the painter has hidden from the Monochromatic mode
+        # colour picker (managed via the My Paints dialog). The full inventory is
+        # still used everywhere else (mixing suggestions, palette).
+        self._mono_hidden = self._load_mono_hidden(settings)
+        # Feed the (filtered) inventory into the Values mono-colour picker and
+        # persist any colour the painter saves from there back to the same store.
         if self._values_editor is not None:
-            self._values_editor.set_paints(self._paints)
-            self._values_editor.paintsChanged.connect(self._on_values_paints_changed)
+            self._values_editor.set_paints(self._visible_mono_paints())
+            self._values_editor.paintAdded.connect(self._on_values_paint_added)
 
         # ---- measure-tool display settings (remembered across sessions) ----
         self._measure_unit = str(settings.value("settings/measure_unit", "cm"))
@@ -1000,24 +1004,47 @@ class MainWindow(QMainWindow):
 
     def _on_my_paints(self) -> None:
         """Open the paint-inventory manager and persist any changes."""
-        dialog = PaintsDialog(self._paints, self)
+        dialog = PaintsDialog(self._paints, self, mono_hidden=self._mono_hidden)
         if not dialog.exec():
             return
         self._paints = dialog.paints()
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        settings.setValue("settings/paints", paints.paints_to_json(self._paints))
+        self._mono_hidden = dialog.mono_hidden()
+        self._persist_paints()
         if self._values_editor is not None:
-            self._values_editor.set_paints(self._paints)
+            self._values_editor.set_paints(self._visible_mono_paints())
         if self._last_sample_rgb is not None:
             self._update_mix_display(self._last_sample_rgb)
 
-    def _on_values_paints_changed(self, new_paints) -> None:
-        """Persist a colour the painter saved from the Values mono-colour picker."""
-        self._paints = [
-            (str(name), (int(r), int(g), int(b))) for name, (r, g, b) in new_paints
+    def _on_values_paint_added(self, name, rgb) -> None:
+        """Append a colour saved from the Values mono-colour picker and persist it.
+
+        A freshly saved colour is shown in the picker by default (not hidden).
+        """
+        self._paints = list(self._paints) + [
+            (str(name), (int(rgb[0]), int(rgb[1]), int(rgb[2])))
         ]
+        self._persist_paints()
+        if self._values_editor is not None:
+            self._values_editor.set_paints(self._visible_mono_paints())
+
+    def _visible_mono_paints(self):
+        """Return the inventory minus any tubes hidden from the mono colour picker."""
+        return [(n, rgb) for n, rgb in self._paints if n not in self._mono_hidden]
+
+    def _persist_paints(self) -> None:
+        """Write the inventory and the mono-hidden name set to QSettings."""
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         settings.setValue("settings/paints", paints.paints_to_json(self._paints))
+        settings.setValue("settings/mono_hidden", json.dumps(sorted(self._mono_hidden)))
+
+    @staticmethod
+    def _load_mono_hidden(settings) -> set:
+        """Read the mono-hidden paint-name set from QSettings (robust to junk)."""
+        try:
+            data = json.loads(settings.value("settings/mono_hidden") or "[]")
+        except (TypeError, ValueError):
+            return set()
+        return {str(n) for n in data} if isinstance(data, list) else set()
 
     # ------------------------------------------------------------------ #
     # Update checking

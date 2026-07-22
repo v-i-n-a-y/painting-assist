@@ -11,8 +11,8 @@ to save a picked colour into My Paints so it is remembered across sessions.
 The effective colour is stored back into the control as a ``#rrggbb`` string via
 the standard ``paramChanged`` signal, so the worker snapshot stays self-contained
 (no registry lookup on the worker thread). Saving to My Paints is surfaced to the
-window via :attr:`paintsChanged`; the window owns the inventory and its
-persistence, matching how the grid editor's canvas positions are pushed in.
+window via :attr:`paintAdded`; the window owns the inventory and its persistence,
+matching how the grid editor's canvas positions are pushed in.
 """
 
 from __future__ import annotations
@@ -48,15 +48,17 @@ class ValuesEditor(QWidget):
     """Values param rows with a My-Paints-aware colour chooser for mono mode.
 
     Emits :attr:`paramChanged` ``(name, value)`` and :attr:`interaction`
-    ``(bool)`` per the custom-editor contract, plus :attr:`paintsChanged`
-    ``(list)`` when the painter saves a picked colour into their paint inventory
-    (the window persists it and pushes the updated list back via
-    :meth:`set_paints`).
+    ``(bool)`` per the custom-editor contract, plus :attr:`paintAdded`
+    ``(name, rgb)`` when the painter saves the current colour into their paint
+    inventory. The window owns the inventory, so it appends the tube, persists
+    it, and pushes the (possibly filtered) list back via :meth:`set_paints` —
+    the editor only ever holds the paints it should display, never the full
+    store, so it emits just the new tube rather than its own list.
     """
 
     paramChanged = Signal(str, object)
     interaction = Signal(bool)
-    paintsChanged = Signal(object)  # list[(name, (r, g, b))]
+    paintAdded = Signal(str, object)  # (name, (r, g, b))
 
     def __init__(self, control, parent=None):
         super().__init__(parent)
@@ -226,9 +228,9 @@ class ValuesEditor(QWidget):
         name = name.strip()
         if not ok or not name:
             return
-        self._paints = list(self._paints) + [(name, rgb)]
-        self._rebuild_colour_combo()  # so it now shows under My Paints, selected
-        self.paintsChanged.emit(self._paints)
+        # The window owns the inventory: it appends and persists, then calls
+        # set_paints() which rebuilds the combo with the new tube selected.
+        self.paintAdded.emit(name, rgb)
 
     # ------------------------------------------------------------------ #
     # Window-driven updates
