@@ -8,7 +8,7 @@
 ; CI overrides this with `iscc /DAppVersion=<tag>` so the installer filename
 ; matches the release tag; the fallback keeps local builds working.
 #ifndef AppVersion
-  #define AppVersion "0.8.0"
+  #define AppVersion "0.9.0"
 #endif
 #define AppPublisher "Vinay Williams"
 #define AppExeName "PaintingAssist.exe"

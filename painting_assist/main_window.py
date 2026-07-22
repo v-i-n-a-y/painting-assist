@@ -1407,7 +1407,12 @@ class MainWindow(QMainWindow):
     # Settings store helpers
     # ------------------------------------------------------------------ #
     def _save_store(self) -> None:
-        """Persist the settings store, swallowing write errors (never crash a GUI action)."""
+        """Persist the settings store, swallowing write errors (never crash a GUI action).
+
+        Stamps the writing app version into the file first, so a future build can
+        tell which release last wrote the settings when reasoning about migrations.
+        """
+        self._store.data["app_version"] = __version__
         try:
             self._store.save()
         except OSError:

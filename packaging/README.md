@@ -5,7 +5,7 @@ Native installers for Painting Assist are built with
 packaging tools. The shared build spec is `packaging/painting_assist.spec` and
 the frozen entry point is `packaging/launch.py`.
 
-The app version is currently `0.8.0`, kept in three places that must be in sync:
+The app version is currently `0.9.0`, kept in three places that must be in sync:
 
 - `pyproject.toml` (`version`)
 - `painting_assist/__init__.py` (`__version__`)
@@ -13,7 +13,7 @@ The app version is currently `0.8.0`, kept in three places that must be in sync:
   `packaging/windows_installer.iss` (the `AppVersion` fallback).
 
 CI installer filenames are no longer hardcoded: `build-installers.yml` derives
-the version from the release tag (`v0.8.0` -> `0.8.0`), falling back to
+the version from the release tag (`v0.9.0` -> `0.9.0`), falling back to
 `__init__.py` on manual dispatch, and passes it to Inno Setup via
 `iscc /DAppVersion=...`. So a release only needs a matching `v*` tag; the three
 in-repo spots above just keep the app's own self-reported version correct.
@@ -40,7 +40,7 @@ STAGE="$(mktemp -d)"
 cp -R "dist/Painting Assist.app" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "Painting Assist" -srcfolder "$STAGE" \
-  -ov -format UDZO dist/PaintingAssist-0.8.0-macos-arm64.dmg
+  -ov -format UDZO dist/PaintingAssist-0.9.0-macos-arm64.dmg
 rm -rf "$STAGE"
 ```
 
@@ -54,7 +54,7 @@ uv run pyinstaller packaging/painting_assist.spec --noconfirm
 # -> dist/Painting Assist/PaintingAssist.exe
 
 iscc packaging\windows_installer.iss
-# -> dist/PaintingAssist-0.8.0-windows-x64-setup.exe
+# -> dist/PaintingAssist-0.9.0-windows-x64-setup.exe
 ```
 
 Requires [Inno Setup](https://jrsoftware.org/isinfo.php) (`iscc` on PATH). It is
@@ -85,16 +85,16 @@ To cut a release:
 
 ```sh
 # bump the version in the three places listed above, commit, then:
-git tag v0.8.0
-git push origin v0.8.0
+git tag v0.9.0
+git push origin v0.9.0
 ```
 
 The matrix produces:
 
 | Platform        | Artifact                                        |
 | --------------- | ----------------------------------------------- |
-| macOS arm64     | `PaintingAssist-0.8.0-macos-arm64.dmg`          |
-| macOS x86_64    | `PaintingAssist-0.8.0-macos-x86_64.dmg`         |
-| Windows x64     | `PaintingAssist-0.8.0-windows-x64-setup.exe`    |
-| Linux x86_64    | `PaintingAssist-0.8.0-linux-x86_64.AppImage`    |
-| Linux x86_64    | `PaintingAssist-0.8.0-linux-x86_64.tar.gz`      |
+| macOS arm64     | `PaintingAssist-0.9.0-macos-arm64.dmg`          |
+| macOS x86_64    | `PaintingAssist-0.9.0-macos-x86_64.dmg`         |
+| Windows x64     | `PaintingAssist-0.9.0-windows-x64-setup.exe`    |
+| Linux x86_64    | `PaintingAssist-0.9.0-linux-x86_64.AppImage`    |
+| Linux x86_64    | `PaintingAssist-0.9.0-linux-x86_64.tar.gz`      |
