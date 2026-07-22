@@ -5,13 +5,18 @@ Native installers for Painting Assist are built with
 packaging tools. The shared build spec is `packaging/painting_assist.spec` and
 the frozen entry point is `packaging/launch.py`.
 
-The app version is currently hardcoded as `0.8.0` in three places that must be
-kept in sync when it changes:
+The app version is currently `0.8.0`, kept in three places that must be in sync:
 
 - `pyproject.toml` (`version`)
 - `painting_assist/__init__.py` (`__version__`)
-- `packaging/painting_assist.spec` (`APP_VERSION`) and the artifact filenames in
-  `.github/workflows/build-installers.yml` / `packaging/windows_installer.iss`.
+- `packaging/painting_assist.spec` (`APP_VERSION`) and
+  `packaging/windows_installer.iss` (the `AppVersion` fallback).
+
+CI installer filenames are no longer hardcoded: `build-installers.yml` derives
+the version from the release tag (`v0.8.0` -> `0.8.0`), falling back to
+`__init__.py` on manual dispatch, and passes it to Inno Setup via
+`iscc /DAppVersion=...`. So a release only needs a matching `v*` tag; the three
+in-repo spots above just keep the app's own self-reported version correct.
 
 ## Local builds
 

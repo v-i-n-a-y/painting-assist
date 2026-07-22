@@ -5,7 +5,11 @@
 ; contains PaintingAssist.exe and its dependencies).
 
 #define AppName "Painting Assist"
-#define AppVersion "0.8.0"
+; CI overrides this with `iscc /DAppVersion=<tag>` so the installer filename
+; matches the release tag; the fallback keeps local builds working.
+#ifndef AppVersion
+  #define AppVersion "0.8.0"
+#endif
 #define AppPublisher "Vinay Williams"
 #define AppExeName "PaintingAssist.exe"
 #define AppURL "https://github.com/v-i-n-a-y/painting-assist"
