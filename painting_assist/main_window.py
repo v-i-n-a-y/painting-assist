@@ -20,7 +20,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QSettings, QTimer
+from PySide6.QtCore import Qt, QSettings, QStandardPaths, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,6 +50,7 @@ from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
 from painting_assist.measure import DISPLAY_UNITS, Calibration
 from painting_assist.pipeline import ControlPipeline
+from painting_assist.settings_store import SettingsStore
 from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
 from painting_assist.widgets.image_view import ImageView
@@ -79,9 +80,51 @@ _SAVE_FILTER = "PNG (*.png);;JPEG (*.jpg);;TIFF (*.tif);;All files (*)"
 # Image extensions accepted by drag-and-drop, mirroring the Open dialog filter.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
-# QSettings scope for persisted window geometry/state and the control session.
+# QSettings scope for persisted window geometry/state (Qt binary blobs). All
+# other, portable settings now live in a versioned JSON store under the app-data
+# folder resolved by ``_app_data_dir``.
 _SETTINGS_ORG = "Vinay"
 _SETTINGS_APP = "Painting Assist"
+
+
+def _app_data_dir() -> str:
+    """Return the OS application-data folder for Painting Assist.
+
+    Uses ``QStandardPaths.AppDataLocation`` (Mac: ``~/Library/Application
+    Support/Painting Assist``; Windows: ``%APPDATA%\\Painting Assist``; Linux:
+    ``~/.local/share/Painting Assist``), falling back to a dotfolder in the home
+    directory if Qt cannot resolve a writable location.
+    """
+    location = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.AppDataLocation
+    )
+    if not location:
+        location = os.path.join(os.path.expanduser("~"), ".painting_assist")
+    return location
+
+
+def _projects_dir() -> str:
+    """Return the default folder for saved ``.paproj`` projects (created on save)."""
+    return os.path.join(_app_data_dir(), "projects")
+
+
+def _json_list(text) -> list:
+    """Parse a JSON string to a list, or return ``[]`` on anything malformed."""
+    try:
+        data = json.loads(text) if text else []
+    except (TypeError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _json_dict(text) -> dict:
+    """Parse a JSON string to a dict, or return ``{}`` on anything malformed."""
+    try:
+        data = json.loads(text) if text else {}
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
 
 # Bumped whenever the dock layout changes shape so a saved arrangement from an
 # older version (e.g. the single "Controls" dock) is ignored and the new default
@@ -236,33 +279,41 @@ class MainWindow(QMainWindow):
         self._applying_state = False
         self._committed_state: dict = {}
 
+        # ---- persistent settings (versioned JSON in the app-data folder) ----
+        # Portable, human-meaningful settings live in a versioned JSON store in
+        # the OS app-data folder so the format can be migrated across releases;
+        # only Qt's binary window geometry/state stays in QSettings. On first run
+        # (no store file yet) any existing QSettings values are imported, so a
+        # user upgrading from an earlier build keeps their preferences, paints
+        # and presets.
+        self._settings_path = os.path.join(_app_data_dir(), "settings.json")
+        self._store = SettingsStore(self._settings_path)
+        first_run = not os.path.exists(self._settings_path)
+        self._store.load()
+        if first_run:
+            self._import_legacy_settings(QSettings(_SETTINGS_ORG, _SETTINGS_APP))
+        prefs = self._store.data["preferences"]
+
         # ---- settings (theme + automatic update checks) ----
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        self._theme_mode = str(settings.value("settings/theme", DEFAULT_THEME))
+        self._theme_mode = str(prefs.get("theme", DEFAULT_THEME))
         if self._theme_mode not in theme.THEME_MODES:
             self._theme_mode = DEFAULT_THEME
         try:
-            self._update_hours = float(
-                settings.value("settings/update_hours", DEFAULT_UPDATE_HOURS)
-            )
+            self._update_hours = float(prefs.get("update_hours", DEFAULT_UPDATE_HOURS))
         except (TypeError, ValueError):
             self._update_hours = DEFAULT_UPDATE_HOURS
 
         # ---- colour-matching settings + paint inventory ----
         try:
-            self._tolerance_pct = int(
-                settings.value("settings/tolerance_pct", DEFAULT_TOLERANCE_PCT)
-            )
+            self._tolerance_pct = int(prefs.get("tolerance_pct", DEFAULT_TOLERANCE_PCT))
         except (TypeError, ValueError):
             self._tolerance_pct = DEFAULT_TOLERANCE_PCT
-        self._on_miss = str(settings.value("settings/on_miss", DEFAULT_ON_MISS))
-        self._paints = paints.paints_from_json(
-            settings.value("settings/paints") or "[]"
-        )
+        self._on_miss = str(prefs.get("on_miss", DEFAULT_ON_MISS))
+        self._paints = self._paints_from_store()
         # Names of paints the painter has hidden from the Monochromatic mode
         # colour picker (managed via the My Paints dialog). The full inventory is
         # still used everywhere else (mixing suggestions, palette).
-        self._mono_hidden = self._load_mono_hidden(settings)
+        self._mono_hidden = {str(n) for n in self._store.data.get("mono_hidden", [])}
         # Feed the (filtered) inventory into the Values mono-colour picker and
         # persist any colour the painter saves from there back to the same store.
         if self._values_editor is not None:
@@ -270,10 +321,10 @@ class MainWindow(QMainWindow):
             self._values_editor.paintAdded.connect(self._on_values_paint_added)
 
         # ---- measure-tool display settings (remembered across sessions) ----
-        self._measure_unit = str(settings.value("settings/measure_unit", "cm"))
+        self._measure_unit = str(prefs.get("measure_unit", "cm"))
         if self._measure_unit not in DISPLAY_UNITS:
             self._measure_unit = "cm"
-        self._measure_edges = settings.value("settings/measure_edges", True, type=bool)
+        self._measure_edges = bool(prefs.get("measure_edges", True))
 
         # ---- update checker (off-thread; signals land on the GUI thread) ----
         self._updater = updater.UpdateChecker(__version__, self)
@@ -695,9 +746,9 @@ class MainWindow(QMainWindow):
         self._save_recent()
 
     def _save_recent(self) -> None:
-        """Persist the recent-files list to QSettings as a JSON array."""
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        settings.setValue("session/recent", json.dumps(self._recent))
+        """Persist the recent-files list to the settings store."""
+        self._store.data["recent_images"] = list(self._recent)
+        self._save_store()
 
     # ------------------------------------------------------------------ #
     # Undo / redo (whole control-session snapshots)
@@ -786,24 +837,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Presets (named control-session snapshots)
     # ------------------------------------------------------------------ #
-    @staticmethod
-    def _load_presets() -> dict:
-        """Read the persisted presets ({name: snapshot}) from QSettings."""
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        raw = settings.value("settings/presets")
-        if not raw:
-            return {}
-        try:
-            data = json.loads(raw)
-        except (ValueError, TypeError):
-            return {}
-        return data if isinstance(data, dict) else {}
+    def _load_presets(self) -> dict:
+        """Read the persisted presets ({name: snapshot}) from the settings store."""
+        data = self._store.data.get("presets")
+        return dict(data) if isinstance(data, dict) else {}
 
-    @staticmethod
-    def _store_presets(presets: dict) -> None:
-        """Persist the presets dict to QSettings as JSON."""
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        settings.setValue("settings/presets", json.dumps(presets))
+    def _store_presets(self, presets: dict) -> None:
+        """Persist the presets dict to the settings store."""
+        self._store.data["presets"] = presets
+        self._save_store()
 
     def _on_save_preset(self) -> None:
         """Prompt for a name and save the current control settings as a preset."""
@@ -988,11 +1030,12 @@ class MainWindow(QMainWindow):
         self._tolerance_pct = int(values["tolerance_pct"])
         self._on_miss = str(values["on_miss"])
 
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        settings.setValue("settings/theme", self._theme_mode)
-        settings.setValue("settings/update_hours", self._update_hours)
-        settings.setValue("settings/tolerance_pct", self._tolerance_pct)
-        settings.setValue("settings/on_miss", self._on_miss)
+        prefs = self._store.data["preferences"]
+        prefs["theme"] = self._theme_mode
+        prefs["update_hours"] = self._update_hours
+        prefs["tolerance_pct"] = self._tolerance_pct
+        prefs["on_miss"] = self._on_miss
+        self._save_store()
 
         app = QApplication.instance()
         if app is not None:
@@ -1032,19 +1075,78 @@ class MainWindow(QMainWindow):
         return [(n, rgb) for n, rgb in self._paints if n not in self._mono_hidden]
 
     def _persist_paints(self) -> None:
-        """Write the inventory and the mono-hidden name set to QSettings."""
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        settings.setValue("settings/paints", paints.paints_to_json(self._paints))
-        settings.setValue("settings/mono_hidden", json.dumps(sorted(self._mono_hidden)))
+        """Write the inventory and the mono-hidden name set to the settings store."""
+        self._store.data["paints"] = self._paints_to_store()
+        self._store.data["mono_hidden"] = sorted(self._mono_hidden)
+        self._save_store()
 
-    @staticmethod
-    def _load_mono_hidden(settings) -> set:
-        """Read the mono-hidden paint-name set from QSettings (robust to junk)."""
+    # ------------------------------------------------------------------ #
+    # Settings store helpers
+    # ------------------------------------------------------------------ #
+    def _save_store(self) -> None:
+        """Persist the settings store, swallowing write errors (never crash a GUI action)."""
         try:
-            data = json.loads(settings.value("settings/mono_hidden") or "[]")
-        except (TypeError, ValueError):
-            return set()
-        return {str(n) for n in data} if isinstance(data, list) else set()
+            self._store.save()
+        except OSError:
+            pass
+
+    def _paints_from_store(self):
+        """Read the paint inventory from the store as ``[(name, (r, g, b))]``.
+
+        Reuses :mod:`painting_assist.paints` coercion by round-tripping the
+        store's native ``[{"name", "rgb"}]`` list through its JSON parser, so a
+        malformed entry is dropped rather than raised on.
+        """
+        return paints.paints_from_json(json.dumps(self._store.data.get("paints", [])))
+
+    def _paints_to_store(self):
+        """Return the inventory in the store's native ``[{"name", "rgb"}]`` shape."""
+        return json.loads(paints.paints_to_json(self._paints))
+
+    def _import_legacy_settings(self, qs: QSettings) -> None:
+        """One-time import of pre-0.9 QSettings values into the JSON store.
+
+        Runs only on first launch after the upgrade (when no store file exists
+        yet), so a user keeps their theme, update prefs, paints, presets, recent
+        files and last session. Each key is copied only if present; anything
+        absent or malformed simply keeps the store default. Window geometry/state
+        stays in QSettings and is not touched here.
+        """
+        store = self._store
+        prefs = store.data["preferences"]
+
+        def _copy(key, target, cast, block=prefs):
+            value = qs.value(key)
+            if value is None:
+                return
+            try:
+                block[target] = cast(value)
+            except (TypeError, ValueError):
+                pass
+
+        _copy("settings/theme", "theme", str)
+        _copy("settings/update_hours", "update_hours", float)
+        _copy("settings/last_update_check", "last_update_check", float)
+        _copy("settings/tolerance_pct", "tolerance_pct", lambda v: int(float(v)))
+        _copy("settings/on_miss", "on_miss", str)
+        _copy("settings/measure_unit", "measure_unit", str)
+        if qs.value("settings/measure_edges") is not None:
+            prefs["measure_edges"] = qs.value("settings/measure_edges", True, type=bool)
+
+        # JSON-string blobs -> native structures in the store.
+        store.data["paints"] = json.loads(
+            paints.paints_to_json(
+                paints.paints_from_json(qs.value("settings/paints") or "[]")
+            )
+        )
+        store.data["mono_hidden"] = _json_list(qs.value("settings/mono_hidden"))
+        store.data["presets"] = _json_dict(qs.value("settings/presets"))
+        store.data["recent_images"] = _json_list(qs.value("session/recent"))
+        store.data["session"]["controls"] = _json_dict(qs.value("session/controls"))
+        last_image = qs.value("session/last_image")
+        store.data["session"]["last_image"] = str(last_image) if last_image else ""
+
+        self._save_store()
 
     # ------------------------------------------------------------------ #
     # Update checking
@@ -1068,9 +1170,8 @@ class MainWindow(QMainWindow):
             return
         self._update_timer.start(int(hours * 3600 * 1000))
         if startup:
-            settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
             try:
-                last = float(settings.value("settings/last_update_check", 0.0))
+                last = float(self._store.get("preferences", "last_update_check", 0.0))
             except (TypeError, ValueError):
                 last = 0.0
             if time.time() - last >= hours * 3600:
@@ -1089,11 +1190,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Checking for updates…", 4000)
         self._updater.check()
 
-    @staticmethod
-    def _record_update_check() -> None:
+    def _record_update_check(self) -> None:
         """Stamp now as the last automatic-check time (throttles startup checks)."""
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        settings.setValue("settings/last_update_check", time.time())
+        self._store.set("preferences", "last_update_check", time.time())
+        self._save_store()
 
     def _on_update_available(self, version: str, asset: dict) -> None:
         """A newer release exists: offer to download and open its installer."""
@@ -1467,17 +1567,15 @@ class MainWindow(QMainWindow):
     def _on_measure_unit_changed(self, _index: int) -> None:
         """Persist the chosen measure unit and re-calibrate the tools."""
         self._measure_unit = str(self._measure_unit_combo.currentData())
-        QSettings(_SETTINGS_ORG, _SETTINGS_APP).setValue(
-            "settings/measure_unit", self._measure_unit
-        )
+        self._store.set("preferences", "measure_unit", self._measure_unit)
+        self._save_store()
         self._update_measure_calibration()
 
     def _on_measure_edges_changed(self, checked: bool) -> None:
         """Persist the edge-distance toggle and re-calibrate the tools."""
         self._measure_edges = bool(checked)
-        QSettings(_SETTINGS_ORG, _SETTINGS_APP).setValue(
-            "settings/measure_edges", self._measure_edges
-        )
+        self._store.set("preferences", "measure_edges", self._measure_edges)
+        self._save_store()
         self._update_measure_calibration()
 
     # ------------------------------------------------------------------ #
@@ -1952,6 +2050,7 @@ class MainWindow(QMainWindow):
         left off. The reload is guarded: a missing or unreadable file degrades to a
         status hint rather than blocking startup.
         """
+        # Window geometry/state stays in QSettings (Qt binary, per-machine).
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
 
         geometry = settings.value("window/geometry")
@@ -1968,28 +2067,24 @@ class MainWindow(QMainWindow):
         if state is not None and saved_layout == _LAYOUT_VERSION:
             self.restoreState(state)
 
-        raw = settings.value("session/controls")
-        if raw:
-            try:
-                states = json.loads(raw)
-            except (ValueError, TypeError):
-                states = None
-            if isinstance(states, dict):
-                for control in self._pipeline.controls():
-                    control_state = states.get(control.id)
-                    if isinstance(control_state, dict):
-                        try:
-                            control.load_state(control_state)
-                        except Exception:  # pragma: no cover - defensive
-                            # One corrupt control state must not block startup.
-                            pass
-                self._panel.refresh_all()
+        # Control session + last image come from the JSON settings store.
+        states = self._store.data.get("session", {}).get("controls")
+        if isinstance(states, dict) and states:
+            for control in self._pipeline.controls():
+                control_state = states.get(control.id)
+                if isinstance(control_state, dict):
+                    try:
+                        control.load_state(control_state)
+                    except Exception:  # pragma: no cover - defensive
+                        # One corrupt control state must not block startup.
+                        pass
+            self._panel.refresh_all()
         # The restored blur mode determines Export availability.
         self._update_export_enabled()
 
         self._recent = prune_recent(self._load_recent())
 
-        last_path = settings.value("session/last_image")
+        last_path = self._store.data.get("session", {}).get("last_image")
         if last_path and os.path.exists(last_path):
             # Reloading emits image_loaded -> _on_image_loaded, which renders with
             # the just-restored control states applied and records the recent entry.
@@ -2000,21 +2095,13 @@ class MainWindow(QMainWindow):
                     "Couldn't reload last image: {}".format(last_path), 6000
                 )
 
-    @staticmethod
-    def _load_recent() -> list:
-        """Read the persisted recent-files list from QSettings (JSON array)."""
-        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-        raw = settings.value("session/recent")
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except (ValueError, TypeError):
-            return []
+    def _load_recent(self) -> list:
+        """Read the persisted recent-files list from the settings store."""
+        data = self._store.data.get("recent_images")
         return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
 
     def _save_session(self) -> None:
-        """Persist window geometry/state and the control session to QSettings.
+        """Persist window geometry/state (QSettings) and the control session (store).
 
         Called only from :meth:`closeEvent`, so a mid-session Reset is never
         clobbered by stale saved state (the session is written on close, not live).
@@ -2027,8 +2114,11 @@ class MainWindow(QMainWindow):
         states = {
             control.id: control.to_state() for control in self._pipeline.controls()
         }
-        settings.setValue("session/controls", json.dumps(states))
-        settings.setValue("session/last_image", self._model.path() or "")
+        self._store.data["session"] = {
+            "last_image": self._model.path() or "",
+            "controls": states,
+        }
+        self._save_store()
 
     # ------------------------------------------------------------------ #
     # Shutdown

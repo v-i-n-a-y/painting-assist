@@ -19,7 +19,13 @@ from PySide6.QtCore import QSettings
 
 from painting_assist import controls  # noqa: F401  -- runs @register decorators
 from painting_assist import theme
-from painting_assist.main_window import _SETTINGS_APP, _SETTINGS_ORG, MainWindow
+from painting_assist.main_window import (
+    _SETTINGS_APP,
+    _SETTINGS_ORG,
+    _app_data_dir,
+    MainWindow,
+)
+from painting_assist.settings_store import SettingsStore
 from painting_assist.widgets.settings_dialog import DEFAULT_THEME
 
 
@@ -41,10 +47,20 @@ def main() -> int:
     app.setApplicationName("Painting Assist")
     app.setApplicationDisplayName("Painting Assist")
 
-    # Apply the persisted theme (system/light/dark) before any window shows,
-    # so the first paint is already in the right look.
-    settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
-    mode = str(settings.value("settings/theme", DEFAULT_THEME))
+    # Apply the persisted theme (system/light/dark) before any window shows, so
+    # the first paint is already in the right look. The theme lives in the JSON
+    # settings store; on the very first launch after upgrading (no store file
+    # yet) fall back to the legacy QSettings value so an existing preference is
+    # still honoured on that first paint (MainWindow then imports it into the
+    # store).
+    settings_path = os.path.join(_app_data_dir(), "settings.json")
+    if os.path.exists(settings_path):
+        store = SettingsStore(settings_path)
+        store.load()
+        mode = str(store.get("preferences", "theme", DEFAULT_THEME))
+    else:
+        legacy = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        mode = str(legacy.value("settings/theme", DEFAULT_THEME))
     if mode not in theme.THEME_MODES:
         mode = DEFAULT_THEME
     theme.apply_theme(app, mode)

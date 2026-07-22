@@ -51,6 +51,22 @@ def main() -> int:
     assert ("Studio umber", (90, 60, 40)) not in visible
     assert ("Studio umber", (90, 60, 40)) in w._paints
 
+    # Settings store: portable settings live in a versioned JSON file under the
+    # app-data folder; saving a paint persisted it there, and it round-trips.
+    from painting_assist.settings_store import SCHEMA_VERSION, SettingsStore
+
+    assert w._settings_path.endswith("settings.json")
+    assert w._store.data["schema_version"] == SCHEMA_VERSION
+    w._persist_paints()  # writes paints + mono_hidden to the store on disk
+    reread = SettingsStore(w._settings_path)
+    reread.load()
+    saved_names = {p["name"] for p in reread.data["paints"]}
+    assert "Studio umber" in saved_names
+    assert "Studio umber" in set(reread.data["mono_hidden"])
+    # Preferences and session sections are always present and versioned.
+    assert "theme" in reread.data["preferences"]
+    assert "controls" in reread.data["session"]
+
     # Each control lives in its own dock, split prep-left / colour-right by
     # default. Dragging a dock to the other side is native Qt and persists via
     # the window's saveState; here we assert the initial arrangement.
