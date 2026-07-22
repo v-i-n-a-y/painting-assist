@@ -22,6 +22,7 @@ from . import white_balance  # noqa: F401  -- registers WhiteBalanceControl
 from . import adjust  # noqa: F401  -- registers ToneControl
 from . import blur  # noqa: F401  -- registers BlurControl
 from . import quantize  # noqa: F401  -- registers ColourGroupsControl
+from . import limited_palette  # noqa: F401  -- registers LimitedPaletteControl
 from . import values  # noqa: F401  -- registers ValuesControl
 from . import temperature  # noqa: F401  -- registers TemperatureMapControl
 from . import grid  # noqa: F401  -- registers GridControl

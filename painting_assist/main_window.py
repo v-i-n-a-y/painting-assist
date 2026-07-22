@@ -294,6 +294,17 @@ class MainWindow(QMainWindow):
         # The values editor's Monochromatic colour picker draws on the painter's
         # My Paints inventory; wired up once the inventory is loaded below.
         self._values_editor = self._panel.editor("values")
+        # The Limited palette control mixes from the My Paints inventory when its
+        # source is "My Paints"; the inventory is injected into a control param
+        # (the worker cannot read live state) once it is loaded below.
+        try:
+            self._palette_sim_control = self._pipeline.control("limited_palette")
+        except KeyError:
+            self._palette_sim_control = None
+        self._palette_sim_editor = self._panel.editor("limited_palette")
+        # When True, the next eyedropper sample is added to the limited palette
+        # rather than shown as a colour readout.
+        self._sampling_for_palette = False
 
         # Recent-files list (most-recent-first), persisted in QSettings.
         self._recent: list = []
@@ -347,6 +358,13 @@ class MainWindow(QMainWindow):
         if self._values_editor is not None:
             self._values_editor.set_paints(self._visible_mono_paints())
             self._values_editor.paintAdded.connect(self._on_values_paint_added)
+        # Inject the inventory into the Limited palette control and let its editor
+        # ask the eyedropper for sampled colours.
+        self._sync_palette_sim_paints(render=False)
+        if self._palette_sim_editor is not None:
+            self._palette_sim_editor.sampleRequested.connect(
+                self._on_palette_sample_requested
+            )
 
         # ---- measure-tool display settings (remembered across sessions) ----
         self._measure_unit = str(prefs.get("measure_unit", "cm"))
@@ -1421,6 +1439,7 @@ class MainWindow(QMainWindow):
         self._persist_paints()
         if self._values_editor is not None:
             self._values_editor.set_paints(self._visible_mono_paints())
+        self._sync_palette_sim_paints()
         if self._last_sample_rgb is not None:
             self._update_mix_display(self._last_sample_rgb)
 
@@ -1435,6 +1454,40 @@ class MainWindow(QMainWindow):
         self._persist_paints()
         if self._values_editor is not None:
             self._values_editor.set_paints(self._visible_mono_paints())
+        self._sync_palette_sim_paints()
+
+    # ------------------------------------------------------------------ #
+    # Limited palette glue (inventory injection + eyedropper sampling)
+    # ------------------------------------------------------------------ #
+    def _sync_palette_sim_paints(self, render: bool = True) -> None:
+        """Push the My Paints inventory into the Limited palette control.
+
+        The worker evaluates controls from a snapshot, so the inventory has to
+        live in a control param rather than be read live. When the control's
+        source is My Paints and it is active, a fresh render is requested so the
+        change shows immediately.
+        """
+        if self._palette_sim_control is None:
+            return
+        hexes = ["#%02x%02x%02x" % (r, g, b) for _n, (r, g, b) in self._paints]
+        self._pipeline.set_value("limited_palette", "paints_json", json.dumps(hexes))
+        if self._palette_sim_editor is not None:
+            self._palette_sim_editor.set_paints(self._paints)
+        if render and self._palette_sim_control.is_active():
+            self._request_render(interactive=False)
+
+    def _on_palette_sample_requested(self) -> None:
+        """The Limited palette editor asked to pick a colour off the image."""
+        if self._last_image is None:
+            self.statusBar().showMessage("Load an image to sample colours from.", 4000)
+            return
+        self._sampling_for_palette = True
+        self._eyedropper_action.setChecked(True)  # arms the viewer's eyedropper
+        self.statusBar().showMessage(
+            "Click the image to add colours to the palette (toggle Eyedropper off "
+            "when done).",
+            6000,
+        )
 
     def _visible_mono_paints(self):
         """Return the inventory minus any tubes hidden from the mono colour picker."""
@@ -1736,10 +1789,11 @@ class MainWindow(QMainWindow):
             # Eyedropper and the measure tools both want the mouse; only one.
             self._clear_measure_tools()
         else:
-            # Leaving eyedropper mode cancels any pending grey-point pick.
+            # Leaving eyedropper mode cancels any pending grey-point or palette pick.
             self._picking_grey = False
+            self._sampling_for_palette = False
         self._view.set_eyedropper(active)
-        if active and not self._picking_grey:
+        if active and not self._picking_grey and not self._sampling_for_palette:
             self.statusBar().showMessage(
                 "Eyedropper: click the image to read a colour.", 4000
             )
@@ -1775,6 +1829,13 @@ class MainWindow(QMainWindow):
         x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
         region = image[y0:y1, x0:x1].reshape(-1, image.shape[2])
         rgb = tuple(int(round(v)) for v in region.mean(axis=0))
+        if self._sampling_for_palette:
+            if self._palette_sim_editor is not None:
+                self._palette_sim_editor.add_sampled_rgb(rgb)
+                self.statusBar().showMessage(
+                    "Added #{:02x}{:02x}{:02x} to the palette.".format(*rgb), 3000
+                )
+            return
         if self._picking_grey:
             self._set_grey_point(rgb)
             return

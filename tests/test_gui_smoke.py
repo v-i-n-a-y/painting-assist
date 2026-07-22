@@ -154,6 +154,31 @@ def main() -> int:
     w._write_gridded_pdf(pdf_cal, ref, (300.0, 225.0))
     assert os.path.getsize(pdf_cal) > 0
 
+    # Limited palette simulation: editor present, a preset resolves and repaints,
+    # the My Paints inventory is injected, and eyedropper sampling appends a tube.
+    import json as _json
+
+    palette_ed = w._panel.editor("limited_palette")
+    assert (
+        palette_ed is not None and type(palette_ed).__name__ == "LimitedPaletteEditor"
+    )
+    lp = w._pipeline.control("limited_palette")
+    lp.set_enabled(True)
+    lp.set("source", "preset")
+    lp.set("preset", "zorn")
+    assert lp.is_active() is True
+    out_lp = lp.process(ref)
+    assert out_lp.shape == ref.shape and out_lp.dtype == ref.dtype
+
+    w._sync_palette_sim_paints(render=False)
+    assert _json.loads(lp.get("paints_json"))  # inventory injected (non-empty)
+
+    lp.set("source", "sampled")
+    w._sampling_for_palette = True
+    w._last_image = ref
+    w._on_colour_sampled(0.5, 0.5)
+    assert _json.loads(lp.get("samples_json"))  # a sampled colour was appended
+
     result = {"rc": 1}
 
     def finish():
