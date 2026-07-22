@@ -215,3 +215,84 @@ def test_matches_reference_grey_isolate():
         _run(img, mode="grey", steps=4, isolate=2),
         _reference(img, "grey", 4, False, 2),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Monochromatic mode: value is preserved exactly, a single hue is added, and
+# the Tint knob / pigment choice behave sensibly.
+# --------------------------------------------------------------------------- #
+def _mono(img, colour="burnt_umber", tint=0.7):
+    c = ValuesControl()
+    c.set("mode", "mono")
+    c.set("mono_colour", colour)
+    c.set("tint", tint)
+    return c.process(img)
+
+
+def test_mono_preserves_value():
+    """Monochromatic staining must not shift the value (Lab L) structure."""
+    img = _img()
+    grey_L = _lab_L(_mono(img, tint=0.0))  # neutral reference (same L pathway)
+    mono_L = _lab_L(_mono(img, tint=1.0))
+    # L should track the original greyscale value within the Lab roundtrip.
+    src_L = _lab_L(img)
+    assert np.max(np.abs(mono_L.astype(np.int16) - src_L.astype(np.int16))) <= 3
+    assert np.max(np.abs(mono_L.astype(np.int16) - grey_L.astype(np.int16))) <= 3
+
+
+def test_mono_adds_chroma():
+    """A tinted mono image is not neutral grey (channels differ)."""
+    img = _img()
+    out = _mono(img, colour="burnt_umber", tint=1.0)
+    r = out[:, :, 0].astype(np.int16)
+    b = out[:, :, 2].astype(np.int16)
+    # Burnt umber is a warm brown: red channel should sit above blue overall.
+    assert int(np.max(np.abs(r - b))) > 5
+    assert r.mean() > b.mean()
+
+
+def test_mono_zero_tint_is_neutral():
+    """Tint 0 collapses to a neutral grey study (R == G == B)."""
+    img = _img()
+    out = _mono(img, tint=0.0)
+    r = out[:, :, 0].astype(np.int16)
+    g = out[:, :, 1].astype(np.int16)
+    b = out[:, :, 2].astype(np.int16)
+    assert np.max(np.abs(r - g)) <= 2
+    assert np.max(np.abs(g - b)) <= 2
+
+
+def test_mono_pigments_differ():
+    """Different pigments produce different stains."""
+    img = _img()
+    warm = _mono(img, colour="burnt_sienna", tint=1.0)
+    cool = _mono(img, colour="payne_grey", tint=1.0)
+    assert not np.array_equal(warm, cool)
+
+
+def test_mono_hue_is_a_function_of_value():
+    """Every pixel of a given value gets the same a/b (single hue per value)."""
+    img = _img()
+    out = _mono(img, colour="indigo", tint=1.0)
+    lab = cv2.cvtColor(np.ascontiguousarray(out), cv2.COLOR_RGB2Lab)
+    L = lab[:, :, 0]
+    for level in np.unique(L):
+        sel = L == level
+        a_vals = lab[:, :, 1][sel]
+        b_vals = lab[:, :, 2][sel]
+        # Pre-conversion the a/b are an exact function of L; the small spread
+        # here is only RGB<->Lab uint8 roundtrip noise.
+        assert int(a_vals.max()) - int(a_vals.min()) <= 3
+        assert int(b_vals.max()) - int(b_vals.min()) <= 3
+
+
+def test_mono_determinism():
+    img = _img()
+    assert np.array_equal(_mono(img.copy()), _mono(img.copy()))
+
+
+def test_mono_does_not_mutate_input():
+    img = _img()
+    original = img.copy()
+    _mono(img)
+    assert np.array_equal(img, original)

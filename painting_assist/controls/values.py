@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List
+import math
+from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -20,7 +21,7 @@ class ValuesControl(Control):
     story so the painter can judge the big dark/mid/light relationships without
     being distracted by colour.
 
-    Two modes:
+    Three modes:
 
     * **Greyscale** replaces every pixel's colour with a neutral grey of the
       same perceptual lightness (the CIELab L channel), so the reference reads
@@ -29,6 +30,13 @@ class ValuesControl(Control):
       — the classic "notan"/limited-value approach — optionally keeping the
       original colour within each band (value-grouped colour) rather than
       going neutral.
+    * **Monochromatic** keeps the full value structure but stains it with a
+      single pigment hue — a brunaille/imprimatura underpainting in one
+      colour (burnt umber, Payne's grey, and so on). Value is preserved
+      exactly; the chosen hue is strongest through the midtones and fades out
+      toward the darkest darks and lightest lights (where real pigment can
+      hold little chroma), so the painter can lay in a tonal underpainting in
+      a single colour while still reading every value.
 
     The optional **Isolate** knob dims every value band except a chosen one
     toward flat mid-grey, letting the painter study one value mass at a time.
@@ -44,6 +52,24 @@ class ValuesControl(Control):
 
     NEUTRAL = 128  # Lab a/b value for a chromatically-neutral (grey) pixel
 
+    # Full-strength chroma (CIELab a/b units) applied by Monochromatic mode at
+    # the midtones; scaled down by the Tint knob and by a per-pixel taper that
+    # falls to zero at pure black/white.
+    MONO_CHROMA = 45.0
+
+    # Representative RGB for each single-pigment underpainting colour. Only the
+    # hue *direction* (the Lab a/b angle) is used, so exact values need not be
+    # colorimetric — just a sensible warm/cool spread of the classic imprimatura
+    # pigments. Burnt umber is the default (the traditional brunaille brown).
+    MONO_PIGMENTS = {
+        "burnt_umber": (110, 65, 40),
+        "raw_umber": (112, 92, 58),
+        "burnt_sienna": (150, 78, 45),
+        "payne_grey": (58, 74, 92),
+        "green_earth": (92, 108, 80),
+        "indigo": (48, 60, 96),
+    }
+
     @classmethod
     def params(cls) -> List[Param]:
         """Schema for mode, value-step count, colour-keeping and isolation."""
@@ -53,11 +79,47 @@ class ValuesControl(Control):
                 label="Mode",
                 ptype=ParamType.CHOICE,
                 default="grey",
-                choices=[("grey", "Greyscale"), ("posterize", "Value steps")],
+                choices=[
+                    ("grey", "Greyscale"),
+                    ("posterize", "Value steps"),
+                    ("mono", "Monochromatic"),
+                ],
                 tooltip=(
                     "Greyscale: replace colour with neutral grey of the same "
                     "lightness. Value steps: posterize lightness into flat "
-                    "value bands (notan)."
+                    "value bands (notan). Monochromatic: keep the value "
+                    "structure but stain it with a single pigment hue."
+                ),
+            ),
+            Param(
+                name="mono_colour",
+                label="Mono colour",
+                ptype=ParamType.CHOICE,
+                default="burnt_umber",
+                choices=[
+                    ("burnt_umber", "Burnt umber"),
+                    ("raw_umber", "Raw umber"),
+                    ("burnt_sienna", "Burnt sienna"),
+                    ("payne_grey", "Payne's grey"),
+                    ("green_earth", "Green earth"),
+                    ("indigo", "Indigo"),
+                ],
+                tooltip=(
+                    "Monochromatic mode: the single pigment hue the value "
+                    "study is stained with."
+                ),
+            ),
+            Param(
+                name="tint",
+                label="Tint strength",
+                ptype=ParamType.FLOAT,
+                default=0.7,
+                minimum=0.0,
+                maximum=1.0,
+                step=0.05,
+                tooltip=(
+                    "Monochromatic mode: how saturated the pigment stain is. "
+                    "0 = neutral grey, 1 = full pigment."
                 ),
             ),
             Param(
@@ -107,6 +169,33 @@ class ValuesControl(Control):
         """Always meaningful when enabled (greyscale changes any colour image)."""
         return self.enabled
 
+    @classmethod
+    def _mono_ab_luts(
+        cls, colour_key: str, tint: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return (a_lut, b_lut): 256-entry uint8 CIELab a/b maps keyed by L.
+
+        The pigment fixes the hue *direction* (its Lab a/b angle); the chroma at
+        each lightness is ``MONO_CHROMA * tint * sin(pi * L/255)`` so it peaks in
+        the midtones and tapers to neutral at pure black and pure white, where
+        real pigment holds no colour. A neutral/unknown pigment yields flat grey.
+        """
+        rgb = np.array(
+            [[cls.MONO_PIGMENTS.get(colour_key, cls.MONO_PIGMENTS["burnt_umber"])]],
+            dtype=np.uint8,
+        )
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2Lab)[0, 0]
+        da = float(lab[1]) - cls.NEUTRAL
+        db = float(lab[2]) - cls.NEUTRAL
+        norm = math.hypot(da, db)
+        nx, ny = (0.0, 0.0) if norm < 1e-6 else (da / norm, db / norm)
+
+        levels = np.arange(256.0)
+        chroma = cls.MONO_CHROMA * tint * np.sin(np.pi * levels / 255.0)
+        a_lut = np.clip(np.round(cls.NEUTRAL + nx * chroma), 0, 255).astype(np.uint8)
+        b_lut = np.clip(np.round(cls.NEUTRAL + ny * chroma), 0, 255).astype(np.uint8)
+        return a_lut, b_lut
+
     def process(self, img: np.ndarray) -> np.ndarray:
         """RGB uint8 HxWx3 -> value-reduced RGB uint8 HxWx3 (new array).
 
@@ -123,6 +212,8 @@ class ValuesControl(Control):
         steps = max(2, min(8, int(self.get("steps"))))
         keep_colour = bool(self.get("keep_colour"))
         isolate = max(0, min(8, int(self.get("isolate"))))
+        mono_colour = self.get("mono_colour")
+        tint = max(0.0, min(1.0, float(self.get("tint"))))
 
         lab = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2Lab)
         L = np.ascontiguousarray(lab[:, :, 0])  # uint8 lightness, 0..255
@@ -156,6 +247,17 @@ class ValuesControl(Control):
             if not keep_colour:
                 out_lab[:, :, 1] = self.NEUTRAL
                 out_lab[:, :, 2] = self.NEUTRAL
+            out = cv2.cvtColor(out_lab, cv2.COLOR_Lab2RGB)
+        elif mode == "mono":
+            # Preserve value exactly (L untouched) and drive the a/b channels
+            # purely as a function of L, so every pixel of a given value gets
+            # the same single hue. The hue direction comes from the pigment;
+            # the amount is Tint * a midtone-peaked taper, so chroma vanishes at
+            # pure black/white. Both channels collapse to 256-entry LUTs.
+            a_lut, b_lut = self._mono_ab_luts(mono_colour, tint)
+            out_lab = lab.copy()
+            out_lab[:, :, 1] = cv2.LUT(L, a_lut)
+            out_lab[:, :, 2] = cv2.LUT(L, b_lut)
             out = cv2.cvtColor(out_lab, cv2.COLOR_Lab2RGB)
         else:  # "grey" (and any unknown value falls back to greyscale)
             out_lab = lab.copy()
