@@ -256,6 +256,17 @@ class ImageView(QGraphicsView):
         # Whether an image has ever been shown (first image always fits).
         self._has_image = False
 
+        # Before/after "compare wipe" overlay. When on, the stored "before"
+        # pixmap is drawn over the left portion of the processed image up to a
+        # draggable vertical divider; the right side shows the already-painted
+        # processed frame. All divider drawing is cosmetic (device coordinates)
+        # so it stays crisp at any zoom.
+        self._compare_on = False
+        self._compare_pixmap: Optional[QPixmap] = None
+        self._compare_frac = 0.5  # divider position as a fraction of the image box
+        self._compare_grab_px = 12  # pixel radius for grabbing the divider handle
+        self._dragging_divider = False
+
         # Centred placeholder shown over the blank viewport before any image is
         # loaded; the window may override the copy via set_placeholder.
         self._placeholder_lines: list[str] = [
@@ -326,6 +337,44 @@ class ImageView(QGraphicsView):
         self._placeholder_lines = list(lines)
         if not self._has_image:
             self.viewport().update()
+
+    # ------------------------------------------------------------------ #
+    # Compare wipe (before/after slider)
+    # ------------------------------------------------------------------ #
+    def set_compare_image(self, rgb: Optional[np.ndarray]) -> None:
+        """Store the "before" frame for the compare wipe, or clear it (``None``).
+
+        ``rgb`` is an RGB uint8 HxWx3 ndarray (the original/unprocessed frame),
+        kept as a QPixmap and drawn over the left side of the wipe. Passing
+        ``None`` clears it, leaving compare mode with nothing extra to draw.
+        """
+        self._compare_pixmap = None if rgb is None else ndarray_to_qpixmap(rgb)
+        self.viewport().update()
+
+    def set_compare_mode(self, on: bool) -> None:
+        """Enable or disable the before/after compare wipe overlay.
+
+        When enabled with no compare image set, nothing extra is drawn until one
+        is provided via :meth:`set_compare_image`.
+        """
+        self._compare_on = bool(on)
+        self.viewport().update()
+
+    def _compare_divider_x(self) -> Optional[float]:
+        """Return the divider's viewport x, or ``None`` if the wipe is inactive.
+
+        Active means compare mode is on, a compare pixmap is set, and the
+        processed pixmap item is non-empty. The returned x is in device
+        (viewport) pixels, matching the on-screen image box.
+        """
+        if not self._compare_on or self._compare_pixmap is None:
+            return None
+        if self._item.pixmap().isNull():
+            return None
+        vp_rect = self.mapFromScene(self._item.sceneBoundingRect()).boundingRect()
+        if vp_rect.width() <= 0:
+            return None
+        return vp_rect.left() + self._compare_frac * vp_rect.width()
 
     def fit_to_window(self) -> None:
         """Scale the view so the whole image is visible, preserving aspect ratio."""
@@ -510,20 +559,51 @@ class ImageView(QGraphicsView):
             self.colourSampled.emit(xn, yn)
 
     def mousePressEvent(self, event) -> None:
-        """In eyedropper mode a left press samples the colour under the cursor."""
+        """Sample in eyedropper mode, or grab the compare divider, else pan/crop."""
         if self._eyedropper and event.button() == Qt.LeftButton:
             self._sample_at(event.position().toPoint())
             event.accept()
             return
+        # Grab the compare divider before pan/crop get a look at the press.
+        if event.button() == Qt.LeftButton:
+            divider_x = self._compare_divider_x()
+            if divider_x is not None:
+                vp_rect = self.mapFromScene(
+                    self._item.sceneBoundingRect()
+                ).boundingRect()
+                pos = event.position()
+                near_x = abs(pos.x() - divider_x) <= self._compare_grab_px
+                in_band = vp_rect.top() <= pos.y() <= vp_rect.bottom()
+                if near_x and in_band:
+                    self._dragging_divider = True
+                    event.accept()
+                    return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
-        """In eyedropper mode dragging with the left button keeps sampling."""
+        """Drag the compare divider, keep sampling in eyedropper mode, else pan."""
+        if self._dragging_divider:
+            vp_rect = self.mapFromScene(self._item.sceneBoundingRect()).boundingRect()
+            width = float(vp_rect.width())
+            if width > 0:
+                frac = (event.position().x() - vp_rect.left()) / width
+                self._compare_frac = max(0.05, min(0.95, frac))
+                self.viewport().update()
+            event.accept()
+            return
         if self._eyedropper and (event.buttons() & Qt.LeftButton):
             self._sample_at(event.position().toPoint())
             event.accept()
             return
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        """Release the compare divider if it was being dragged, else fall through."""
+        if self._dragging_divider:
+            self._dragging_divider = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         """Zoom about the cursor, clamping the cumulative scale to a sane range."""
@@ -562,6 +642,8 @@ class ImageView(QGraphicsView):
         while ``_has_image`` is false — the first loaded image hides it for good.
         """
         super().drawForeground(painter, rect)
+        # Draw the compare wipe first so the grid/measure labels stay on top of it.
+        self._draw_compare_overlay(painter)
         self._draw_grid_labels(painter)
         self._draw_measure_labels(painter)
         if self._has_image or not self._placeholder_lines:
@@ -585,6 +667,84 @@ class ImageView(QGraphicsView):
     # ------------------------------------------------------------------ #
     # Grid + measure labels (drawn in the foreground, never clipped/trailed)
     # ------------------------------------------------------------------ #
+    def _draw_compare_overlay(self, painter: QPainter) -> None:
+        """Paint the before/after wipe: the "before" pixmap over the left side.
+
+        The compare pixmap is scaled to fill the same on-screen box the processed
+        image occupies and clipped to the region left of the divider, so the two
+        framings line up even if their pixel sizes differ under crop. Everything
+        is drawn in device (viewport) coordinates so the divider and handle stay
+        crisp at any zoom.
+        """
+        if not self._compare_on or self._compare_pixmap is None:
+            return
+        if self._item.pixmap().isNull():
+            return
+        vp_rect = self.mapFromScene(self._item.sceneBoundingRect()).boundingRect()
+        if vp_rect.width() <= 0 or vp_rect.height() <= 0:
+            return
+        divider_x = vp_rect.left() + self._compare_frac * vp_rect.width()
+
+        painter.save()
+        painter.setWorldMatrixEnabled(False)  # device (viewport) coordinates
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        # Clip the "before" pixmap to the region left of the divider and draw it
+        # scaled to fill the whole image box.
+        left_clip = QRectF(
+            vp_rect.left(),
+            vp_rect.top(),
+            divider_x - vp_rect.left(),
+            vp_rect.height(),
+        )
+        painter.setClipRect(left_clip)
+        painter.drawPixmap(
+            QRectF(vp_rect), self._compare_pixmap, QRectF(self._compare_pixmap.rect())
+        )
+        painter.setClipping(False)
+
+        # Subtle "Before"/"After" labels near the top corners of each side.
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        fm = QFontMetrics(painter.font())
+        vp = QRectF(self.viewport().rect())
+        if divider_x - vp_rect.left() > fm.horizontalAdvance("Before") + 24:
+            self._paint_measure_label(
+                painter,
+                fm,
+                vp_rect.left() + 4,
+                vp_rect.top() + 4,
+                "Before",
+                vp,
+                "below",
+            )
+        if vp_rect.right() - divider_x > fm.horizontalAdvance("After") + 24:
+            self._paint_measure_label(
+                painter, fm, divider_x + 4, vp_rect.top() + 4, "After", vp, "below"
+            )
+
+        # Crisp vertical divider: a thin dark outline under a white line so it
+        # reads on any image.
+        top = float(vp_rect.top())
+        bottom = float(vp_rect.bottom())
+        line = QLineF(divider_x, top, divider_x, bottom)
+        outline = QPen(QColor(0, 0, 0, 200))
+        outline.setWidthF(3.0)
+        painter.setPen(outline)
+        painter.drawLine(line)
+        core = QPen(QColor(255, 255, 255, 235))
+        core.setWidthF(1.4)
+        painter.setPen(core)
+        painter.drawLine(line)
+
+        # Grab handle: a filled circle centred vertically on the divider.
+        cy = (top + bottom) / 2.0
+        centre = QPointF(divider_x, cy)
+        painter.setPen(QPen(QColor(0, 0, 0, 200), 1.5))
+        painter.setBrush(QColor(255, 255, 255, 235))
+        painter.drawEllipse(centre, 7.0, 7.0)
+
+        painter.restore()
+
     def _draw_grid_labels(self, painter: QPainter) -> None:
         """Label each gridline with its position on the canvas.
 

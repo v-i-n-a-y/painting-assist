@@ -20,8 +20,25 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QFileSystemWatcher, QSettings, QStandardPaths, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtCore import (
+    Qt,
+    QFileSystemWatcher,
+    QMarginsF,
+    QRectF,
+    QSettings,
+    QStandardPaths,
+    QTimer,
+)
+from PySide6.QtGui import (
+    QAction,
+    QImage,
+    QKeySequence,
+    QPageLayout,
+    QPageSize,
+    QPainter,
+    QPdfWriter,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -51,6 +68,7 @@ from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
 from painting_assist.measure import DISPLAY_UNITS, Calibration
 from painting_assist.pipeline import ControlPipeline
+from painting_assist.print_layout import tile_grid
 from painting_assist.settings_store import SettingsStore
 from painting_assist.render_controller import RenderController
 from painting_assist.widgets.control_panel import ControlPanel
@@ -510,6 +528,20 @@ class MainWindow(QMainWindow):
         self._eyedropper_action.toggled.connect(self._on_eyedropper_toggled)
         toolbar.addAction(self._eyedropper_action)
 
+        # Before/after wipe: shows the original on the left of a draggable divider
+        # and the processed result on the right (hold-B stays as a quick flip).
+        self._compare_action = QAction("Compare", self)
+        self._compare_action.setShortcut(QKeySequence("C"))
+        self._compare_action.setCheckable(True)
+        self._compare_action.setStatusTip(
+            "Wipe between the original and the processed image (drag the divider)"
+        )
+        self._compare_action.setToolTip(
+            "Wipe between the original reference and the processed result"
+        )
+        self._compare_action.toggled.connect(self._on_compare_toggled)
+        toolbar.addAction(self._compare_action)
+
         # Measure tools: mutually exclusive checkable buttons; clicking the
         # active one again returns to no measuring. Kept in a dict so the
         # eyedropper (and each other) can clear them.
@@ -644,6 +676,16 @@ class MainWindow(QMainWindow):
         self._export_palette_action.setEnabled(False)
         self._export_palette_action.triggered.connect(self._on_export_palette)
         file_menu.addAction(self._export_palette_action)
+
+        self._export_gridded_pdf_action = QAction(
+            "Export Gridded Reference to PDF…", self
+        )
+        self._export_gridded_pdf_action.setStatusTip(
+            "Print the reference with its positioning grid baked on, at true "
+            "canvas scale and tiled across pages when a canvas size is set"
+        )
+        self._export_gridded_pdf_action.triggered.connect(self._on_export_gridded_pdf)
+        file_menu.addAction(self._export_gridded_pdf_action)
         file_menu.addSeparator()
 
         save_preset_action = QAction("Save Preset…", self)
@@ -699,6 +741,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._histogram_dock.toggleViewAction())
         view_menu.addSeparator()
         view_menu.addAction(self._eyedropper_action)
+        view_menu.addAction(self._compare_action)
 
         grey_point_action = QAction("Pick Grey Point…", self)
         grey_point_action.setStatusTip(
@@ -1701,6 +1744,17 @@ class MainWindow(QMainWindow):
                 "Eyedropper: click the image to read a colour.", 4000
             )
 
+    def _on_compare_toggled(self, active: bool) -> None:
+        """Toolbar/menu toggle: show or hide the before/after wipe in the viewer.
+
+        The "before" frame is the untouched original; the "after" is the live
+        processed image the view already shows. The original is pushed in when the
+        wipe is switched on (and refreshed when a new reference loads).
+        """
+        if active:
+            self._view.set_compare_image(self._model.original())
+        self._view.set_compare_mode(active)
+
     def _on_colour_sampled(self, xn: float, yn: float) -> None:
         """The eyedropper picked normalised coords: read the processed colour.
 
@@ -1940,6 +1994,216 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage("Palette saved.", 4000)
 
+    # A4 page and margin used for the gridded-reference PDF, in millimetres.
+    _PDF_PAGE_MM = (210.0, 297.0)
+    _PDF_MARGIN_MM = 10.0
+
+    def _canvas_size_mm(self):
+        """Return ``(mm_w, mm_h)`` from the crop control's canvas size, or ``None``.
+
+        Reads the physical canvas size the painter entered in Canvas & Crop and
+        converts it to millimetres. Returns ``None`` when there is no calibration
+        (missing control/keys, a non-positive size, or a pixel unit), so the
+        caller falls back to the fit-to-one-page path.
+        """
+        factors = {"cm": 10.0, "mm": 1.0, "in": 25.4}
+        try:
+            crop = self._pipeline.control("crop")
+            canvas_w = float(crop.get("canvas_w"))
+            canvas_h = float(crop.get("canvas_h"))
+            unit = str(crop.get("unit"))
+        except (KeyError, TypeError, ValueError):
+            return None
+        factor = factors.get(unit)
+        if factor is None or canvas_w <= 0 or canvas_h <= 0:
+            return None
+        return canvas_w * factor, canvas_h * factor
+
+    def _on_export_gridded_pdf(self) -> None:
+        """Export the reference with its grid baked on to a multi-page PDF.
+
+        When the canvas is calibrated the image prints at true physical scale and
+        tiles across A4 pages so the sheets assemble into a full-size gridding
+        template; otherwise the whole gridded image is fitted onto one page.
+        """
+        img = self._model.original()
+        if img is None:
+            QMessageBox.information(
+                self,
+                "Export gridded reference",
+                "Load a reference image first.",
+            )
+            return
+
+        # Bake the grid onto a fresh array (draw_grid never mutates its input).
+        if self._grid_control is not None:
+            spec = self._grid_control.overlay_spec()
+            if spec.get("visible"):
+                img = draw_grid(
+                    img,
+                    spec["columns"],
+                    spec["rows"],
+                    spec["color_rgb"],
+                    spec["opacity"],
+                    spec["thickness"],
+                    spec["diagonals"],
+                    spec["layout"],
+                )
+
+        start_dir = os.path.join(_app_data_dir(), "gridded_reference.pdf")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Gridded Reference", start_dir, "PDF (*.pdf)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+
+        size_mm = self._canvas_size_mm()
+
+        try:
+            self._write_gridded_pdf(path, img, size_mm)
+        except Exception as exc:  # pragma: no cover - GUI/IO error path
+            QMessageBox.critical(
+                self,
+                "Export failed",
+                "Could not write the PDF:\n{}".format(exc),
+            )
+            return
+        self.statusBar().showMessage(
+            "Exported gridded reference to '{}'.".format(os.path.basename(path)),
+            5000,
+        )
+
+    def _write_gridded_pdf(self, path: str, img, size_mm) -> None:
+        """Render ``img`` (a baked RGB uint8 array) to the PDF at ``path``.
+
+        ``size_mm`` is ``(mm_w, mm_h)`` for the calibrated true-scale tiled path,
+        or ``None`` for the uncalibrated fit-to-one-page path. Kept separate from
+        the slot so the IO is wrapped once by the caller's try/except.
+        """
+        # Keep the ndarray alive for as long as the QImage borrows its buffer.
+        arr = np.ascontiguousarray(img)
+        h, w = arr.shape[:2]
+        qimage = QImage(arr.data, w, h, 3 * w, QImage.Format_RGB888)
+
+        writer = QPdfWriter(path)
+        writer.setResolution(300)
+        writer.setPageSize(QPageSize(QPageSize.A4))
+        # Handle margins ourselves in millimetres, so paint (0, 0) is the page
+        # corner and device pixels map cleanly onto physical millimetres.
+        writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Millimeter)
+
+        dpi = writer.resolution()
+        px_per_mm = dpi / 25.4
+        page_mm_w, page_mm_h = self._PDF_PAGE_MM
+        margin_mm = self._PDF_MARGIN_MM
+        printable_mm_w = page_mm_w - 2.0 * margin_mm
+        printable_mm_h = page_mm_h - 2.0 * margin_mm
+
+        painter = QPainter(writer)
+        try:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            if size_mm is None:
+                self._paint_fit_page(
+                    painter,
+                    qimage,
+                    w,
+                    h,
+                    px_per_mm,
+                    margin_mm,
+                    printable_mm_w,
+                    printable_mm_h,
+                )
+            else:
+                self._paint_tiled_pages(
+                    painter,
+                    writer,
+                    qimage,
+                    w,
+                    h,
+                    size_mm,
+                    px_per_mm,
+                    margin_mm,
+                    printable_mm_w,
+                    printable_mm_h,
+                    os.path.basename(path),
+                )
+        finally:
+            painter.end()
+
+    def _paint_fit_page(
+        self,
+        painter,
+        qimage,
+        w,
+        h,
+        px_per_mm,
+        margin_mm,
+        printable_mm_w,
+        printable_mm_h,
+    ) -> None:
+        """Draw the whole image scaled to fit one page, centred in the margins."""
+        margin_px = margin_mm * px_per_mm
+        area_w = printable_mm_w * px_per_mm
+        area_h = printable_mm_h * px_per_mm
+        scale = min(area_w / w, area_h / h)
+        draw_w = w * scale
+        draw_h = h * scale
+        x = margin_px + (area_w - draw_w) / 2.0
+        y = margin_px + (area_h - draw_h) / 2.0
+        painter.drawImage(
+            QRectF(x, y, draw_w, draw_h),
+            qimage,
+            QRectF(0, 0, w, h),
+        )
+
+    def _paint_tiled_pages(
+        self,
+        painter,
+        writer,
+        qimage,
+        w,
+        h,
+        size_mm,
+        px_per_mm,
+        margin_mm,
+        printable_mm_w,
+        printable_mm_h,
+        basename,
+    ) -> None:
+        """Tile the image at true physical scale across pages (calibrated path)."""
+        mm_w, mm_h = size_mm
+        page_mm_w, page_mm_h = self._PDF_PAGE_MM
+        tiles = tile_grid(w, h, mm_w, mm_h, page_mm_w, page_mm_h, margin_mm)
+        cols = max((t.col for t in tiles), default=0) + 1
+        rows = max((t.row for t in tiles), default=0) + 1
+        margin_px = margin_mm * px_per_mm
+        for index, tile in enumerate(tiles):
+            if index > 0:
+                writer.newPage()
+            target = QRectF(
+                margin_px,
+                margin_px,
+                tile.dst_mm_w * px_per_mm,
+                tile.dst_mm_h * px_per_mm,
+            )
+            source = QRectF(tile.src_x, tile.src_y, tile.src_w, tile.src_h)
+            painter.drawImage(target, qimage, source)
+            footer = "Tile {},{} of {} x {} - {}".format(
+                tile.col + 1, tile.row + 1, cols, rows, basename
+            )
+            painter.drawText(
+                QRectF(
+                    margin_px,
+                    (page_mm_h - margin_mm) * px_per_mm,
+                    printable_mm_w * px_per_mm,
+                    margin_mm * px_per_mm,
+                ),
+                int(Qt.AlignLeft | Qt.AlignVCenter),
+                footer,
+            )
+
     # ------------------------------------------------------------------ #
     # Toolbar slots
     # ------------------------------------------------------------------ #
@@ -2117,6 +2381,9 @@ class MainWindow(QMainWindow):
         original = self._model.original()
         if original is not None:
             self._view.set_image(original, preserve_view=False)
+        # Keep the before/after wipe's "before" frame on the new reference.
+        if self._compare_action.isChecked():
+            self._view.set_compare_image(original)
         path = self._model.path()
         if path:
             self._add_recent(path)

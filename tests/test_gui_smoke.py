@@ -137,6 +137,23 @@ def main() -> int:
     b.set("spacing", "even")
     assert b.stage_levels() == [80, 60, 40, 20, 0], b.stage_levels()
 
+    # Before/after compare wipe: the toolbar toggle drives the view's mode.
+    w._compare_action.setChecked(True)
+    assert w._view._compare_on is True
+    w._compare_action.setChecked(False)
+    assert w._view._compare_on is False
+
+    # Export gridded reference to PDF: exercise the writer directly (the menu
+    # action goes via a file dialog). Both the uncalibrated fit-to-page path and
+    # the calibrated true-scale tiled path must produce a non-empty PDF.
+    ref = w._model.original()
+    pdf_uncal = os.path.join(tmp_dir, "uncal.pdf")
+    w._write_gridded_pdf(pdf_uncal, ref, None)
+    assert os.path.getsize(pdf_uncal) > 0
+    pdf_cal = os.path.join(tmp_dir, "cal.pdf")
+    w._write_gridded_pdf(pdf_cal, ref, (300.0, 225.0))
+    assert os.path.getsize(pdf_cal) > 0
+
     result = {"rc": 1}
 
     def finish():
