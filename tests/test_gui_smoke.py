@@ -7,6 +7,7 @@ Exits 0 and prints PASS on success. Uses a QTimer to quit the event loop so it
 never blocks. Skips cleanly (prints SKIP) if no Qt platform can be initialised.
 """
 
+import os
 import sys
 
 import numpy as np
@@ -66,6 +67,34 @@ def main() -> int:
     # Preferences and session sections are always present and versioned.
     assert "theme" in reread.data["preferences"]
     assert "controls" in reread.data["session"]
+
+    # Project round-trip: saving the current session to a .paproj writes a doc
+    # whose controls and measure settings faithfully round-trip through the
+    # project module, and applying that doc restores a since-mutated control.
+    import tempfile
+
+    from painting_assist import project as project_mod
+
+    tmp_dir = tempfile.mkdtemp(prefix="pa_smoke_")
+    tmp_path = os.path.join(tmp_dir, "roundtrip" + project_mod.PROJECT_EXTENSION)
+    w._write_project(tmp_path)  # bypass the Save dialog
+    assert os.path.exists(tmp_path)
+    assert w._current_project_path == tmp_path
+
+    with open(tmp_path, encoding="utf-8") as handle:
+        doc = project_mod.from_json(handle.read())
+    assert doc.controls, "saved project should carry a non-empty controls blob"
+    assert doc.measure["unit"] == w._measure_unit
+
+    # Mutate a control, then applying the saved doc must restore its value.
+    w._pipeline.control("blur").set("radius", 17)
+    assert w._pipeline.control("blur").get("radius") == 17
+    saved_radius = doc.controls["blur"]["values"]["radius"]
+    w._apply_project(doc, tmp_path)
+    assert w._pipeline.control("blur").get("radius") == saved_radius
+    assert w._current_project_path == tmp_path
+    base = os.path.basename(tmp_path)[: -len(project_mod.PROJECT_EXTENSION)]
+    assert base in w.windowTitle()
 
     # Each control lives in its own dock, split prep-left / colour-right by
     # default. Dragging a dock to the other side is native Qt and persists via

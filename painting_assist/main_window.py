@@ -20,7 +20,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QSettings, QStandardPaths, QTimer
+from PySide6.QtCore import Qt, QFileSystemWatcher, QSettings, QStandardPaths, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +42,7 @@ from painting_assist import (
     colour_mixing,
     mixing,
     paints,
+    project as project_mod,
     theme,
     updater,
 )
@@ -240,6 +241,15 @@ class MainWindow(QMainWindow):
         self._crop_editing = False
         self._fit_next = False
 
+        # ---- project document association + referenced-image watcher ----
+        # A project (.paproj) ties the current controls, measure settings and the
+        # referenced image path together. The watcher notices when the referenced
+        # photo changes or vanishes on disk so the painter is warned in time.
+        self._current_project_path: Optional[str] = None
+        self._watched_image: Optional[str] = None
+        self._image_watcher = QFileSystemWatcher(self)
+        self._image_watcher.fileChanged.connect(self._on_watched_image_changed)
+
         # Last processed frame shown in the view, kept so the before/after (B-key)
         # toggle can flip to the original and back without forcing a re-render.
         self._last_image: Optional[np.ndarray] = None
@@ -397,6 +407,9 @@ class MainWindow(QMainWindow):
         # Baseline for undo/redo: the just-restored state, with empty history.
         self._committed_state = self._capture_state()
         self._update_undo_actions()
+
+        # No project is open at startup; reflect that in the window title.
+        self._update_window_title()
 
     # ------------------------------------------------------------------ #
     # Control docks
@@ -583,6 +596,39 @@ class MainWindow(QMainWindow):
     def _build_menus(self) -> None:
         """Build the File / View / Help menu bar from the shared actions."""
         file_menu = self.menuBar().addMenu("File")
+
+        # ---- project document actions (kept above the image Open/Save block) ----
+        new_project_action = QAction("New Project", self)
+        new_project_action.setStatusTip(
+            "Detach from the current project and reset all controls"
+        )
+        new_project_action.triggered.connect(self._on_new_project)
+        file_menu.addAction(new_project_action)
+
+        open_project_action = QAction("Open Project…", self)
+        open_project_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        open_project_action.setStatusTip("Open a saved Painting Assist project")
+        open_project_action.triggered.connect(self._on_open_project)
+        file_menu.addAction(open_project_action)
+
+        save_project_action = QAction("Save Project", self)
+        save_project_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        save_project_action.setStatusTip("Save the current project")
+        save_project_action.triggered.connect(self._on_save_project)
+        file_menu.addAction(save_project_action)
+
+        save_project_as_action = QAction("Save Project As…", self)
+        save_project_as_action.setStatusTip("Save the current project to a new file")
+        save_project_as_action.triggered.connect(self._on_save_project_as)
+        file_menu.addAction(save_project_as_action)
+
+        self._recent_projects_menu = file_menu.addMenu("Open Recent Project")
+        self._recent_projects_menu.aboutToShow.connect(
+            self._rebuild_recent_projects_menu
+        )
+
+        file_menu.addSeparator()
+
         file_menu.addAction(self._open_action)
 
         self._recent_menu = file_menu.addMenu("Open Recent")
@@ -749,6 +795,283 @@ class MainWindow(QMainWindow):
         """Persist the recent-files list to the settings store."""
         self._store.data["recent_images"] = list(self._recent)
         self._save_store()
+
+    # ------------------------------------------------------------------ #
+    # Projects (.paproj documents)
+    # ------------------------------------------------------------------ #
+    def _update_window_title(self) -> None:
+        """Set the window title, naming the open project when there is one.
+
+        With no project open the title is just the application name; once a
+        project is associated it becomes ``"<app> - <project name>"`` where the
+        name is the project's file name without the ``.paproj`` extension.
+        """
+        ext = project_mod.PROJECT_EXTENSION
+        if self._current_project_path:
+            base = os.path.basename(self._current_project_path)
+            if base.endswith(ext):
+                base = base[: -len(ext)]
+            self.setWindowTitle("{} - {}".format(APP_NAME, base))
+        else:
+            self.setWindowTitle(APP_NAME)
+
+    def _on_new_project(self) -> None:
+        """Start a new project: reset the controls and clear the association.
+
+        This mirrors the Reset action's control reset, then detaches from any
+        open project file and stops watching its referenced image. The currently
+        loaded image is deliberately kept so a fresh project can reuse it.
+        """
+        if self._crop_editing:
+            self._end_crop_edit(render=False)
+        self._panel.reset_all()
+        self._slider_down = False
+        self._update_export_enabled()
+        self._update_grid_overlay()
+        self._commit_state()
+        self._request_render(interactive=False)
+        self._current_project_path = None
+        self._set_watched_image(None)
+        self._update_window_title()
+        self.statusBar().showMessage("New project.", 4000)
+
+    def _on_save_project(self) -> None:
+        """Save to the current project file, or prompt for one when none is set."""
+        if not self._current_project_path:
+            self._on_save_project_as()
+            return
+        self._write_project(self._current_project_path)
+
+    def _on_save_project_as(self) -> None:
+        """Choose a destination file and save the current project to it."""
+        try:
+            os.makedirs(_projects_dir(), exist_ok=True)
+        except OSError:
+            pass
+        if self._current_project_path:
+            start_dir = os.path.dirname(self._current_project_path)
+        else:
+            start_dir = _projects_dir()
+        ext = project_mod.PROJECT_EXTENSION
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project",
+            start_dir,
+            "Painting Assist project (*{})".format(ext),
+        )
+        if not path:
+            return
+        if not path.endswith(ext):
+            path += ext
+        self._write_project(path)
+
+    def _write_project(self, path: str) -> None:
+        """Serialise the current session to ``path`` as a ``.paproj`` document.
+
+        Captures the full control state and the measure display settings, plus a
+        reference to the current image path (the pixels are not embedded). On a
+        write error the user is told and the association is left unchanged.
+        """
+        doc = project_mod.ProjectDocument.new(
+            image_path=self._model.path() or "",
+            controls=self._capture_state(),
+            measure={"unit": self._measure_unit, "edges": bool(self._measure_edges)},
+            app_version=__version__,
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(doc.to_json())
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Save failed", "Could not save project:\n{}".format(exc)
+            )
+            return
+        self._current_project_path = path
+        self._add_recent_project(path)
+        self._set_watched_image(self._model.path())
+        self._update_window_title()
+        self.statusBar().showMessage(
+            "Saved project '{}'.".format(os.path.basename(path)), 4000
+        )
+
+    def _on_open_project(self) -> None:
+        """Prompt for a ``.paproj`` file and load it into the session."""
+        ext = project_mod.PROJECT_EXTENSION
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project",
+            _projects_dir(),
+            "Painting Assist project (*{})".format(ext),
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Open failed", "Could not open project:\n{}".format(exc)
+            )
+            return
+        doc = project_mod.from_json(text)
+        self._apply_project(doc, path)
+
+    def _apply_project(self, doc, path: str) -> None:
+        """Apply a loaded project document: controls, measure settings and image.
+
+        The controls and measure settings are applied first (so they take effect
+        even when the referenced image is missing), then the image is reloaded if
+        it still exists. A referenced-but-missing image is a warning, not a
+        failure: the settings stay applied and the painter can relink the photo.
+        """
+        # Controls.
+        self._apply_state(doc.controls)
+
+        # Measure display settings, mirrored into the status-bar strip.
+        unit = doc.measure.get("unit")
+        if unit in DISPLAY_UNITS:
+            self._measure_unit = unit
+        self._measure_edges = bool(doc.measure.get("edges", self._measure_edges))
+        combo = getattr(self, "_measure_unit_combo", None)
+        if combo is not None:
+            idx = combo.findData(self._measure_unit)
+            if idx >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
+        check = getattr(self, "_measure_edges_check", None)
+        if check is not None:
+            check.blockSignals(True)
+            check.setChecked(bool(self._measure_edges))
+            check.blockSignals(False)
+        self._update_measure_calibration()
+
+        self._current_project_path = path
+        self._add_recent_project(path)
+        self._update_window_title()
+
+        # Referenced image (by path; the pixels are not stored in the project).
+        if doc.image_path and os.path.exists(doc.image_path):
+            try:
+                self._model.load_path(doc.image_path)
+            except Exception:  # pragma: no cover - GUI/IO error path
+                self.statusBar().showMessage(
+                    "Couldn't load the project's image: {}".format(doc.image_path),
+                    6000,
+                )
+            self._set_watched_image(doc.image_path)
+        elif doc.image_path:
+            QMessageBox.warning(
+                self,
+                "Image not found",
+                "The image this project refers to could not be found:\n{}\n\n"
+                "The project's settings have been applied. Relink it by opening "
+                "the image again.".format(doc.image_path),
+            )
+            self._set_watched_image(None)
+        else:
+            self._set_watched_image(None)
+
+        self.statusBar().showMessage(
+            "Opened project '{}'.".format(os.path.basename(path)), 4000
+        )
+
+    # -- recent projects (File ▸ Open Recent Project) -------------------- #
+    def _recent_projects(self) -> list:
+        """Return the persisted recent-projects list from the settings store."""
+        data = self._store.data.get("recent_projects")
+        return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
+
+    def _add_recent_project(self, path: str) -> None:
+        """Record ``path`` as the most-recently-used project and persist the list."""
+        self._store.data["recent_projects"] = update_recent(
+            self._recent_projects(), path
+        )
+        self._save_store()
+
+    def _rebuild_recent_projects_menu(self) -> None:
+        """Repopulate Open Recent Project, pruning projects that have vanished."""
+        current = self._recent_projects()
+        pruned = prune_recent(current)
+        if pruned != current:
+            self._store.data["recent_projects"] = pruned
+            self._save_store()
+
+        menu = self._recent_projects_menu
+        menu.clear()
+        if not pruned:
+            empty = menu.addAction("(No recent projects)")
+            empty.setEnabled(False)
+            return
+        for path in pruned:
+            act = menu.addAction(path)
+            act.triggered.connect(
+                lambda _checked=False, p=path: self._open_recent_project(p)
+            )
+        menu.addSeparator()
+        clear = menu.addAction("Clear")
+        clear.triggered.connect(self._clear_recent_projects)
+
+    def _open_recent_project(self, path: str) -> None:
+        """Open a project chosen from the Open Recent Project menu."""
+        if not os.path.exists(path):
+            self._store.data["recent_projects"] = prune_recent(self._recent_projects())
+            self._save_store()
+            self.statusBar().showMessage(
+                "That project is no longer available: {}".format(path), 6000
+            )
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Open failed", "Could not open project:\n{}".format(exc)
+            )
+            return
+        doc = project_mod.from_json(text)
+        self._apply_project(doc, path)
+
+    def _clear_recent_projects(self) -> None:
+        """Empty the recent-projects list."""
+        self._store.data["recent_projects"] = []
+        self._save_store()
+
+    # -- referenced-image file watching ---------------------------------- #
+    def _set_watched_image(self, path) -> None:
+        """Watch ``path`` for on-disk changes, replacing any previously watched file.
+
+        Passing a falsy path (or one that does not exist) simply stops watching.
+        """
+        watched = self._image_watcher.files()
+        if watched:
+            self._image_watcher.removePaths(watched)
+        if path and os.path.exists(path):
+            self._image_watcher.addPath(path)
+        self._watched_image = path or None
+
+    def _on_watched_image_changed(self, path: str) -> None:
+        """The referenced image changed on disk: notify without auto-reloading.
+
+        QFileSystemWatcher drops a path when the file is replaced or removed, so a
+        still-present file is re-added (and reported as a lightweight status hint),
+        while a vanished file raises a warning that the project has lost its image.
+        The image is never reloaded automatically.
+        """
+        if os.path.exists(path):
+            if path not in self._image_watcher.files():
+                self._image_watcher.addPath(path)
+            self.statusBar().showMessage(
+                "Referenced image changed on disk: {}".format(os.path.basename(path)),
+                6000,
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Image moved or deleted",
+                "The image this project refers to was moved or deleted, so the "
+                "project can no longer find it:\n{}".format(path),
+            )
 
     # ------------------------------------------------------------------ #
     # Undo / redo (whole control-session snapshots)
