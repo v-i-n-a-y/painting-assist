@@ -30,8 +30,22 @@ def main() -> int:
     # Editors were built by the panel from each control's create_editor().
     crop_ed = w._panel.editor("crop")
     blur_ed = w._panel.editor("blur")
+    values_ed = w._panel.editor("values")
     assert crop_ed is not None and type(crop_ed).__name__ == "CropEditor"
     assert blur_ed is not None and type(blur_ed).__name__ == "BlurEditor"
+    assert values_ed is not None and type(values_ed).__name__ == "ValuesEditor"
+
+    # The Values mono-colour picker: saving a colour flows back to My Paints and
+    # a custom hex is honoured by the control. Start from a known custom colour.
+    n_before = len(w._paints)
+    w._pipeline.control("values").set("mono_hex", "#123456")
+    values_ed.refresh()  # combo now shows a "Custom (#123456)" entry, selected
+    values_ed._paints = list(w._paints) + [("Studio umber", (90, 60, 40))]
+    values_ed.paintsChanged.emit(values_ed._paints)
+    assert len(w._paints) == n_before + 1
+    assert w._paints[-1] == ("Studio umber", (90, 60, 40))
+    # Editing My Paints via the window pushes the fresh list into the picker.
+    w._values_editor.set_paints(w._paints)
 
     # Each control lives in its own dock, split prep-left / colour-right by
     # default. Dragging a dock to the other side is native Qt and persists via

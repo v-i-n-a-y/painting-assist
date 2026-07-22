@@ -220,6 +220,9 @@ class MainWindow(QMainWindow):
             self._grid_control = None
         # The grid's custom editor carries the canvas-position readout.
         self._grid_editor = self._panel.editor("grid")
+        # The values editor's Monochromatic colour picker draws on the painter's
+        # My Paints inventory; wired up once the inventory is loaded below.
+        self._values_editor = self._panel.editor("values")
 
         # Recent-files list (most-recent-first), persisted in QSettings.
         self._recent: list = []
@@ -256,6 +259,11 @@ class MainWindow(QMainWindow):
         self._paints = paints.paints_from_json(
             settings.value("settings/paints") or "[]"
         )
+        # Feed the inventory into the Values mono-colour picker and persist any
+        # colour the painter saves from there back to the same store.
+        if self._values_editor is not None:
+            self._values_editor.set_paints(self._paints)
+            self._values_editor.paintsChanged.connect(self._on_values_paints_changed)
 
         # ---- measure-tool display settings (remembered across sessions) ----
         self._measure_unit = str(settings.value("settings/measure_unit", "cm"))
@@ -998,8 +1006,18 @@ class MainWindow(QMainWindow):
         self._paints = dialog.paints()
         settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         settings.setValue("settings/paints", paints.paints_to_json(self._paints))
+        if self._values_editor is not None:
+            self._values_editor.set_paints(self._paints)
         if self._last_sample_rgb is not None:
             self._update_mix_display(self._last_sample_rgb)
+
+    def _on_values_paints_changed(self, new_paints) -> None:
+        """Persist a colour the painter saved from the Values mono-colour picker."""
+        self._paints = [
+            (str(name), (int(r), int(g), int(b))) for name, (r, g, b) in new_paints
+        ]
+        settings = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        settings.setValue("settings/paints", paints.paints_to_json(self._paints))
 
     # ------------------------------------------------------------------ #
     # Update checking

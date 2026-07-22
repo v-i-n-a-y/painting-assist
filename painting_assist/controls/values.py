@@ -57,18 +57,23 @@ class ValuesControl(Control):
     # falls to zero at pure black/white.
     MONO_CHROMA = 45.0
 
-    # Representative RGB for each single-pigment underpainting colour. Only the
+    # Built-in single-pigment underpainting colours, as (label, RGB). Only the
     # hue *direction* (the Lab a/b angle) is used, so exact values need not be
     # colorimetric — just a sensible warm/cool spread of the classic imprimatura
     # pigments. Burnt umber is the default (the traditional brunaille brown).
-    MONO_PIGMENTS = {
-        "burnt_umber": (110, 65, 40),
-        "raw_umber": (112, 92, 58),
-        "burnt_sienna": (150, 78, 45),
-        "payne_grey": (58, 74, 92),
-        "green_earth": (92, 108, 80),
-        "indigo": (48, 60, 96),
-    }
+    # The painter can also pick any custom colour or one of their own paint
+    # tubes; whatever the choice, the effective colour is stored as a hex string
+    # in the ``mono_hex`` param so it travels with the worker snapshot self-
+    # contained (no registry lookup on the worker thread).
+    MONO_PRESETS = [
+        ("Burnt umber", (110, 65, 40)),
+        ("Raw umber", (112, 92, 58)),
+        ("Burnt sienna", (150, 78, 45)),
+        ("Payne's grey", (58, 74, 92)),
+        ("Green earth", (92, 108, 80)),
+        ("Indigo", (48, 60, 96)),
+    ]
+    DEFAULT_MONO_HEX = "#6e4128"  # burnt umber (110, 65, 40)
 
     @classmethod
     def params(cls) -> List[Param]:
@@ -92,21 +97,14 @@ class ValuesControl(Control):
                 ),
             ),
             Param(
-                name="mono_colour",
+                name="mono_hex",
                 label="Mono colour",
-                ptype=ParamType.CHOICE,
-                default="burnt_umber",
-                choices=[
-                    ("burnt_umber", "Burnt umber"),
-                    ("raw_umber", "Raw umber"),
-                    ("burnt_sienna", "Burnt sienna"),
-                    ("payne_grey", "Payne's grey"),
-                    ("green_earth", "Green earth"),
-                    ("indigo", "Indigo"),
-                ],
+                ptype=ParamType.TEXT,
+                default=cls.DEFAULT_MONO_HEX,
                 tooltip=(
                     "Monochromatic mode: the single pigment hue the value "
-                    "study is stained with."
+                    "study is stained with (a preset, one of your paints, or a "
+                    "custom colour)."
                 ),
             ),
             Param(
@@ -169,22 +167,51 @@ class ValuesControl(Control):
         """Always meaningful when enabled (greyscale changes any colour image)."""
         return self.enabled
 
+    def create_editor(self, parent=None):
+        """Return the custom Values editor (colour picker for Monochromatic mode).
+
+        Qt is imported lazily so this control module stays Qt-free for headless
+        processing/testing; only building the editor pulls in the widget.
+        """
+        from painting_assist.widgets.values_editor import ValuesEditor
+
+        return ValuesEditor(self, parent)
+
+    @staticmethod
+    def parse_hex(text: object) -> Tuple[int, int, int]:
+        """Parse ``#rrggbb`` (or ``rrggbb``) to an (r, g, b) 0-255 triple.
+
+        Robust to malformed input (used on session restore and free-form param
+        values): anything that is not a valid 6-digit hex colour falls back to
+        burnt umber, so :meth:`process` always has a usable pigment.
+        """
+        s = str(text).strip().lstrip("#")
+        if len(s) == 6:
+            try:
+                return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+            except ValueError:
+                pass
+        return ValuesControl.MONO_PRESETS[0][1]
+
+    @staticmethod
+    def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
+        """Return ``#rrggbb`` for an (r, g, b) triple (components clamped 0-255)."""
+        r, g, b = (max(0, min(255, int(round(c)))) for c in rgb)
+        return "#%02x%02x%02x" % (r, g, b)
+
     @classmethod
     def _mono_ab_luts(
-        cls, colour_key: str, tint: float
+        cls, rgb: Tuple[int, int, int], tint: float
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Return (a_lut, b_lut): 256-entry uint8 CIELab a/b maps keyed by L.
 
         The pigment fixes the hue *direction* (its Lab a/b angle); the chroma at
         each lightness is ``MONO_CHROMA * tint * sin(pi * L/255)`` so it peaks in
         the midtones and tapers to neutral at pure black and pure white, where
-        real pigment holds no colour. A neutral/unknown pigment yields flat grey.
+        real pigment holds no colour. A neutral/grey pigment yields flat grey.
         """
-        rgb = np.array(
-            [[cls.MONO_PIGMENTS.get(colour_key, cls.MONO_PIGMENTS["burnt_umber"])]],
-            dtype=np.uint8,
-        )
-        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2Lab)[0, 0]
+        pigment = np.array([[tuple(int(c) for c in rgb)]], dtype=np.uint8)
+        lab = cv2.cvtColor(pigment, cv2.COLOR_RGB2Lab)[0, 0]
         da = float(lab[1]) - cls.NEUTRAL
         db = float(lab[2]) - cls.NEUTRAL
         norm = math.hypot(da, db)
@@ -212,7 +239,7 @@ class ValuesControl(Control):
         steps = max(2, min(8, int(self.get("steps"))))
         keep_colour = bool(self.get("keep_colour"))
         isolate = max(0, min(8, int(self.get("isolate"))))
-        mono_colour = self.get("mono_colour")
+        mono_rgb = self.parse_hex(self.get("mono_hex"))
         tint = max(0.0, min(1.0, float(self.get("tint"))))
 
         lab = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2Lab)
@@ -254,7 +281,7 @@ class ValuesControl(Control):
             # the same single hue. The hue direction comes from the pigment;
             # the amount is Tint * a midtone-peaked taper, so chroma vanishes at
             # pure black/white. Both channels collapse to 256-entry LUTs.
-            a_lut, b_lut = self._mono_ab_luts(mono_colour, tint)
+            a_lut, b_lut = self._mono_ab_luts(mono_rgb, tint)
             out_lab = lab.copy()
             out_lab[:, :, 1] = cv2.LUT(L, a_lut)
             out_lab[:, :, 2] = cv2.LUT(L, b_lut)

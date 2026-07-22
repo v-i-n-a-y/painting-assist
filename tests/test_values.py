@@ -221,10 +221,16 @@ def test_matches_reference_grey_isolate():
 # Monochromatic mode: value is preserved exactly, a single hue is added, and
 # the Tint knob / pigment choice behave sensibly.
 # --------------------------------------------------------------------------- #
-def _mono(img, colour="burnt_umber", tint=0.7):
+_BURNT_UMBER = "#6e4128"
+_BURNT_SIENNA = "#964e2d"
+_PAYNE_GREY = "#3a4a5c"
+_INDIGO = "#303c60"
+
+
+def _mono(img, colour=_BURNT_UMBER, tint=0.7):
     c = ValuesControl()
     c.set("mode", "mono")
-    c.set("mono_colour", colour)
+    c.set("mono_hex", colour)
     c.set("tint", tint)
     return c.process(img)
 
@@ -243,7 +249,7 @@ def test_mono_preserves_value():
 def test_mono_adds_chroma():
     """A tinted mono image is not neutral grey (channels differ)."""
     img = _img()
-    out = _mono(img, colour="burnt_umber", tint=1.0)
+    out = _mono(img, colour=_BURNT_UMBER, tint=1.0)
     r = out[:, :, 0].astype(np.int16)
     b = out[:, :, 2].astype(np.int16)
     # Burnt umber is a warm brown: red channel should sit above blue overall.
@@ -265,15 +271,15 @@ def test_mono_zero_tint_is_neutral():
 def test_mono_pigments_differ():
     """Different pigments produce different stains."""
     img = _img()
-    warm = _mono(img, colour="burnt_sienna", tint=1.0)
-    cool = _mono(img, colour="payne_grey", tint=1.0)
+    warm = _mono(img, colour=_BURNT_SIENNA, tint=1.0)
+    cool = _mono(img, colour=_PAYNE_GREY, tint=1.0)
     assert not np.array_equal(warm, cool)
 
 
 def test_mono_hue_is_a_function_of_value():
     """Every pixel of a given value gets the same a/b (single hue per value)."""
     img = _img()
-    out = _mono(img, colour="indigo", tint=1.0)
+    out = _mono(img, colour=_INDIGO, tint=1.0)
     lab = cv2.cvtColor(np.ascontiguousarray(out), cv2.COLOR_RGB2Lab)
     L = lab[:, :, 0]
     for level in np.unique(L):
@@ -296,3 +302,36 @@ def test_mono_does_not_mutate_input():
     original = img.copy()
     _mono(img)
     assert np.array_equal(img, original)
+
+
+def test_mono_custom_hex_is_used():
+    """An arbitrary custom hex (not a preset) stains toward that hue."""
+    img = _img()
+    # A saturated green custom colour: the green channel should lead.
+    out = _mono(img, colour="#2e8b3a", tint=1.0)
+    g = out[:, :, 1].astype(np.int16)
+    r = out[:, :, 0].astype(np.int16)
+    assert g.mean() > r.mean()
+
+
+# --------------------------------------------------------------------------- #
+# Hex helpers (Qt-free) used by the mono-colour picker and session restore.
+# --------------------------------------------------------------------------- #
+def test_parse_hex_roundtrip_and_forms():
+    assert ValuesControl.parse_hex("#6e4128") == (110, 65, 40)
+    assert ValuesControl.parse_hex("6E4128") == (110, 65, 40)  # no hash, upper
+    assert ValuesControl.parse_hex("  #ffffff ") == (255, 255, 255)
+
+
+def test_parse_hex_bad_input_falls_back_to_burnt_umber():
+    fallback = ValuesControl.MONO_PRESETS[0][1]
+    for bad in ("", "#12", "nothex", None, 123, "#gggggg"):
+        assert ValuesControl.parse_hex(bad) == fallback
+
+
+def test_rgb_to_hex_clamps_and_formats():
+    assert ValuesControl.rgb_to_hex((110, 65, 40)) == "#6e4128"
+    assert ValuesControl.rgb_to_hex((-5, 300, 40)) == "#00ff28"
+    # Round-trips with parse_hex.
+    for _, rgb in ValuesControl.MONO_PRESETS:
+        assert ValuesControl.parse_hex(ValuesControl.rgb_to_hex(rgb)) == rgb
