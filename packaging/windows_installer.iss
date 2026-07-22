@@ -5,7 +5,7 @@
 ; contains PaintingAssist.exe and its dependencies).
 
 #define AppName "Painting Assist"
-#define AppVersion "0.7.0"
+#define AppVersion "0.8.0"
 #define AppPublisher "Vinay Williams"
 #define AppExeName "PaintingAssist.exe"
 #define AppURL "https://github.com/v-i-n-a-y/painting-assist"
