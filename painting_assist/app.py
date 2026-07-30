@@ -14,14 +14,20 @@ import os
 import platform
 import sys
 
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from PySide6.QtCore import QSettings, QTimer, qInstallMessageHandler, QtMsgType
+from PySide6.QtCore import (
+    QSettings,
+    QTimer,
+    QUrl,
+    qInstallMessageHandler,
+    QtMsgType,
+)
 
 from painting_assist import __version__
 from painting_assist import controls  # noqa: F401  -- runs @register decorators
-from painting_assist import logging_setup, theme
+from painting_assist import bug_report, logging_setup, theme
 from painting_assist.main_window import (
     _SETTINGS_APP,
     _SETTINGS_ORG,
@@ -58,14 +64,28 @@ def _error_notifier(msg: str) -> None:
     """
 
     def show() -> None:
-        QMessageBox.critical(
-            None,
+        box = QMessageBox(
+            QMessageBox.Critical,
             "Unexpected error",
             "An unexpected error occurred:\n\n"
             f"{msg}\n\n"
-            "Details have been written to the log "
-            "(Help ▸ View Logs…).",
+            "Details have been written to the log (Help ▸ View Logs…). You can "
+            "open a pre-filled GitHub report below — nothing is sent until you "
+            "review and submit it.",
         )
+        report_btn = box.addButton("Report on GitHub", QMessageBox.ActionRole)
+        box.addButton("Close", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is report_btn:
+            session = logging_setup.active_session_path()
+            log_text = logging_setup.read_log_text(session) if session else ""
+            url = bug_report.issue_url(
+                __version__,
+                log_text,
+                title=f"Crash: {msg}",
+                intro="Painting Assist reported an uncaught exception.",
+            )
+            QDesktopServices.openUrl(QUrl(url))
 
     QTimer.singleShot(0, show)
 

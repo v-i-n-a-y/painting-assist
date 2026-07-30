@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from painting_assist import logging_setup
+from painting_assist import __version__, bug_report, logging_setup
 
 
 def _human_size(num_bytes: int) -> str:
@@ -90,6 +90,12 @@ class LogViewer(QDialog):
         self._copy_selection_btn.setEnabled(False)
         open_folder_btn = QPushButton("Open Logs Folder")
         open_folder_btn.clicked.connect(self._open_logs_folder)
+        report_btn = QPushButton("Report on GitHub")
+        report_btn.setToolTip(
+            "Open a pre-filled GitHub issue with this session's log; "
+            "nothing is sent until you review and submit it."
+        )
+        report_btn.clicked.connect(self._report_on_github)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
 
@@ -98,6 +104,7 @@ class LogViewer(QDialog):
         bottom_row.addWidget(self._copy_all_btn)
         bottom_row.addWidget(self._copy_selection_btn)
         bottom_row.addWidget(open_folder_btn)
+        bottom_row.addWidget(report_btn)
         bottom_row.addStretch(1)
         bottom_row.addWidget(close_btn)
 
@@ -196,3 +203,14 @@ class LogViewer(QDialog):
     def _open_logs_folder(self) -> None:
         if self._log_dir:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._log_dir))
+
+    def _report_on_github(self) -> None:
+        """Open a pre-filled GitHub issue carrying the selected session's log."""
+        path = self._session_combo.currentData()
+        log_text = logging_setup.read_log_text(path) if path else ""
+        url = bug_report.issue_url(
+            __version__,
+            log_text,
+            title=f"Bug report — Painting Assist {__version__}",
+        )
+        QDesktopServices.openUrl(QUrl(url))
