@@ -187,6 +187,23 @@ def test_suggest_buy_skips_owned_paints():
         assert result.buy.lower() not in owned
 
 
+def test_suggest_buy_without_mixbox_does_not_crash(monkeypatch):
+    # With mixbox unavailable the buy path must fall back to the additive model
+    # instead of dereferencing the None module (regression: _quick_error used to
+    # call mixbox.rgb_to_latent unconditionally, crashing on_miss="buy").
+    import painting_assist.mixing as mixing
+
+    monkeypatch.setattr(mixing, "MIXBOX_AVAILABLE", False)
+    monkeypatch.setattr(mixing, "mixbox", None)
+    tubes = [("White", (250, 250, 245)), ("Black", (32, 30, 30))]
+    target = _CATALOGUE["Ultramarine Blue"]
+    result = mixing.suggest(target, tubes, tolerance_pct=25, on_miss="buy")
+    # It returns a well-formed suggestion; buy may or may not clear the budget
+    # under the coarser additive model, but it must not raise.
+    assert result.recipe
+    assert isinstance(result.message, str)
+
+
 def test_suggest_no_tubes():
     result = suggest((10, 20, 30), [], on_miss="buy")
     assert result.recipe == []

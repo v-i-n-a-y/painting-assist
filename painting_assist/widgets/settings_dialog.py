@@ -1,6 +1,6 @@
 # Copyright 2026 Vinay Williams
 
-"""Application settings dialog (theme + automatic update checking).
+"""Application settings dialog (theme, update checking, colour matching, logs).
 
 The dialog edits plain values and reports them back through :meth:`values`;
 persistence (QSettings) and applying the choices live in ``MainWindow``, so
@@ -16,7 +16,12 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -88,11 +93,18 @@ class SettingsDialog(QDialog):
         update_hours: float = DEFAULT_UPDATE_HOURS,
         tolerance_pct: int = DEFAULT_TOLERANCE_PCT,
         on_miss: str = DEFAULT_ON_MISS,
+        log_dir: str = "",
+        default_log_dir: str = "",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setModal(True)
+
+        # The configured log-location override ("" means use the platform
+        # default). The line edit only ever displays the *effective* path.
+        self._log_dir = (log_dir or "").strip()
+        self._default_log_dir = default_log_dir
 
         form = QFormLayout()
 
@@ -124,6 +136,27 @@ class SettingsDialog(QDialog):
         self._miss_combo.setCurrentIndex(_miss_index(on_miss))
         form.addRow("If unreachable", self._miss_combo)
 
+        # Log location: a read-only display of the effective folder plus Browse
+        # / Reset. Changing it is stored as an override ("" = default) and the
+        # application picks it up on the next launch.
+        self._log_path_edit = QLineEdit()
+        self._log_path_edit.setReadOnly(True)
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self._on_browse_log_dir)
+        reset_btn = QPushButton("Reset to default")
+        reset_btn.clicked.connect(self._on_reset_log_dir)
+        log_row = QHBoxLayout()
+        log_row.addWidget(self._log_path_edit, 1)
+        log_row.addWidget(browse_btn)
+        log_row.addWidget(reset_btn)
+        form.addRow("Log location", log_row)
+
+        note = QLabel("Takes effect the next time Painting Assist starts.")
+        note.setEnabled(False)  # renders as a muted hint
+        form.addRow("", note)
+
+        self._refresh_log_path_edit()
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -132,6 +165,35 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
 
+    # ------------------------------------------------------------------ #
+    # Log-location handlers
+    # ------------------------------------------------------------------ #
+    def _effective_log_dir(self) -> str:
+        """The folder actually used: the override, or the platform default."""
+        return self._log_dir or self._default_log_dir
+
+    def _refresh_log_path_edit(self) -> None:
+        """Show the effective path, tagging the default so it is unambiguous."""
+        path = self._effective_log_dir()
+        suffix = " (default)" if not self._log_dir else ""
+        self._log_path_edit.setText(path + suffix)
+        self._log_path_edit.setToolTip(path)
+
+    def _on_browse_log_dir(self) -> None:
+        """Pick a folder for the logs; an empty pick leaves the choice unchanged."""
+        start = self._effective_log_dir() or ""
+        chosen = QFileDialog.getExistingDirectory(self, "Choose log folder", start)
+        if not chosen:
+            return
+        # Selecting the default folder is equivalent to "use default".
+        self._log_dir = "" if chosen == self._default_log_dir else chosen
+        self._refresh_log_path_edit()
+
+    def _on_reset_log_dir(self) -> None:
+        """Clear the override so logs return to the platform default folder."""
+        self._log_dir = ""
+        self._refresh_log_path_edit()
+
     def values(self) -> Dict[str, object]:
         """Return the chosen settings (theme, update interval, mix tolerance)."""
         return {
@@ -139,4 +201,5 @@ class SettingsDialog(QDialog):
             "update_hours": UPDATE_INTERVALS[self._interval_combo.currentIndex()][1],
             "tolerance_pct": int(self._tolerance_spin.value()),
             "on_miss": MISS_CHOICES[self._miss_combo.currentIndex()][1],
+            "log_dir": self._log_dir,
         }

@@ -41,6 +41,7 @@ DEFAULTS: dict = {
         "on_miss": "closest",
         "measure_unit": "cm",
         "measure_edges": True,
+        "log_dir": "",  # "" -> platform default (<app-data>/logs)
     },
     "paints": [],  # list of {"name": str, "rgb": [r, g, b]}
     "mono_hidden": [],  # list of str

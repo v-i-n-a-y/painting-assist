@@ -227,8 +227,13 @@ def _quick_error(
     """Cheap deltaE estimate for a tube set via the latent fit (no grid search).
 
     Used only to rank buy candidates before the full perceptual search runs on a
-    shortlist, so a large catalogue stays fast.
+    shortlist, so a large catalogue stays fast. With mixbox unavailable there is
+    no latent space, so it falls back to the additive model's achieved colour
+    (matching :func:`best_mix`'s fallback) rather than touching ``mixbox``.
     """
+    if not MIXBOX_AVAILABLE:
+        _, mixed_rgb = _best_mix_additive(target, tubes)
+        return deltae(mixed_rgb, target)
     latents = np.array([mixbox.rgb_to_latent(rgb) for _, rgb in tubes], dtype=float).T
     target_latent = np.array(mixbox.rgb_to_latent(target), dtype=float)
     weights = _latent_convex_weights(latents, target_latent)

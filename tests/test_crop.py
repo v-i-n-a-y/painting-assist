@@ -60,6 +60,18 @@ def test_partial_crop_is_active_when_enabled():
     assert c.is_active() is True
 
 
+def test_has_crop_tracks_applied_rect_independent_of_enabled():
+    c = CropControl()
+    # Full frame, disabled: no crop applied.
+    assert c.has_crop() is False
+    # A real crop is "applied" even while the control is disabled (unlike
+    # is_active, which also requires enabled) — the editor uses this to know
+    # the canvas aspect ratio is now fixed.
+    c.set("rw", 0.5)
+    assert c.has_crop() is True
+    assert c.enabled is False
+
+
 def test_degenerate_rect_never_empty():
     c = CropControl()
     # A zero-size rect must still yield at least a 1x1 region, never an empty

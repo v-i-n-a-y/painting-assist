@@ -57,6 +57,7 @@ from painting_assist import (
     __author__,
     __version__,
     colour_mixing,
+    logging_setup,
     mixing,
     paints,
     project as project_mod,
@@ -79,6 +80,7 @@ from painting_assist.widgets.palette_panel import (
     render_palette_strip,
 )
 from painting_assist.widgets.value_histogram import ValueHistogram
+from painting_assist.widgets.log_viewer import LogViewer
 from painting_assist.widgets.paints_dialog import PaintsDialog
 from painting_assist.widgets.settings_dialog import (
     DEFAULT_ON_MISS,
@@ -788,6 +790,10 @@ class MainWindow(QMainWindow):
         check_updates_action.triggered.connect(self._on_check_updates)
         help_menu.addAction(check_updates_action)
 
+        view_logs_action = QAction("View Logs…", self)
+        view_logs_action.triggered.connect(self._on_view_logs)
+        help_menu.addAction(view_logs_action)
+
         # Pin About in the Help menu too (same reason as Settings above: the
         # macOS app-menu relocation for AboutRole doesn't reliably land in the
         # frozen bundle).
@@ -1303,6 +1309,14 @@ class MainWindow(QMainWindow):
             f"<b>{APP_NAME}</b><br>Version {__version__}<br><br>Author: {__author__}",
         )
 
+    def _on_view_logs(self) -> None:
+        """Open the log viewer on the active log folder / current session."""
+        log_dir = logging_setup.active_log_dir() or logging_setup.default_log_dir(
+            _app_data_dir()
+        )
+        viewer = LogViewer(log_dir, logging_setup.active_session_path(), self)
+        viewer.exec()
+
     def _on_getting_started(self) -> None:
         """Show a short in-app primer on the coarse-to-fine workflow."""
         QMessageBox.information(
@@ -1399,12 +1413,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     def _on_settings(self) -> None:
         """Open the settings dialog; apply and persist any accepted changes."""
+        prefs = self._store.data["preferences"]
         dialog = SettingsDialog(
             self._theme_mode,
             self._update_hours,
             self._tolerance_pct,
             self._on_miss,
-            self,
+            log_dir=str(prefs.get("log_dir", "")),
+            default_log_dir=logging_setup.default_log_dir(_app_data_dir()),
+            parent=self,
         )
         if not dialog.exec():
             return
@@ -1414,11 +1431,11 @@ class MainWindow(QMainWindow):
         self._tolerance_pct = int(values["tolerance_pct"])
         self._on_miss = str(values["on_miss"])
 
-        prefs = self._store.data["preferences"]
         prefs["theme"] = self._theme_mode
         prefs["update_hours"] = self._update_hours
         prefs["tolerance_pct"] = self._tolerance_pct
         prefs["on_miss"] = self._on_miss
+        prefs["log_dir"] = str(values["log_dir"])
         self._save_store()
 
         app = QApplication.instance()
@@ -2594,13 +2611,39 @@ class MainWindow(QMainWindow):
             self._request_render(interactive=False)
 
     def _on_crop_rect_changed(self, rx: float, ry: float, rw: float, rh: float) -> None:
-        """The overlay moved/resized: store the normalised rect on the control."""
+        """The overlay moved/resized: store the normalised rect on the control.
+
+        For a *freeform* crop the box shape defines the aspect ratio, so the
+        canvas Height is scaled to keep ``canvas_w : canvas_h`` equal to the
+        box's true pixel aspect. This keeps the gridline/measure calibration in
+        step with the crop (a locked box already matches, so it is left alone).
+        """
         if self._crop_control is None:
             return
         self._pipeline.set_value("crop", "rx", rx)
         self._pipeline.set_value("crop", "ry", ry)
         self._pipeline.set_value("crop", "rw", rw)
         self._pipeline.set_value("crop", "rh", rh)
+        self._sync_canvas_to_freeform_crop(rw, rh)
+
+    def _sync_canvas_to_freeform_crop(self, rw: float, rh: float) -> None:
+        """Match the canvas Height to a freeform crop box's pixel aspect ratio."""
+        if bool(self._crop_control.get("lock_ratio")):
+            return  # locked box already carries the canvas ratio
+        original = self._model.original()
+        if original is None or rw <= 0 or rh <= 0:
+            return
+        img_h, img_w = original.shape[:2]
+        aspect = (rw * img_w) / (rh * img_h)  # box width : height in pixels
+        if aspect <= 0:
+            return
+        canvas_w = float(self._crop_control.get("canvas_w"))
+        if canvas_w <= 0:
+            return
+        self._pipeline.set_value("crop", "canvas_h", canvas_w / aspect)
+        if self._crop_editor is not None:
+            self._crop_editor.refresh()
+        self._update_measure_calibration()
 
     # ------------------------------------------------------------------ #
     # Drag and drop

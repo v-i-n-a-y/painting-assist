@@ -9,16 +9,19 @@ each concrete control module, populating the registry *before*
 
 from __future__ import annotations
 
+import logging
 import os
+import platform
 import sys
 
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QTimer, qInstallMessageHandler, QtMsgType
 
+from painting_assist import __version__
 from painting_assist import controls  # noqa: F401  -- runs @register decorators
-from painting_assist import theme
+from painting_assist import logging_setup, theme
 from painting_assist.main_window import (
     _SETTINGS_APP,
     _SETTINGS_ORG,
@@ -27,6 +30,44 @@ from painting_assist.main_window import (
 )
 from painting_assist.settings_store import SettingsStore
 from painting_assist.widgets.settings_dialog import DEFAULT_THEME
+
+_log = logging.getLogger("painting_assist.app")
+
+# Map Qt's own diagnostic severities onto the stdlib logging levels so framework
+# warnings (missing fonts, layout complaints, etc.) land in the same log file.
+_QT_LEVELS = {
+    QtMsgType.QtDebugMsg: logging.DEBUG,
+    QtMsgType.QtInfoMsg: logging.INFO,
+    QtMsgType.QtWarningMsg: logging.WARNING,
+    QtMsgType.QtCriticalMsg: logging.ERROR,
+    QtMsgType.QtFatalMsg: logging.CRITICAL,
+}
+
+
+def _qt_message_handler(mode, context, message: str) -> None:
+    """Route Qt's internal messages into the ``qt`` logger."""
+    logging.getLogger("qt").log(_QT_LEVELS.get(mode, logging.INFO), "%s", message)
+
+
+def _error_notifier(msg: str) -> None:
+    """Show a non-fatal error dialog after an uncaught exception was logged.
+
+    Called from the logging excepthook, so it defers the dialog onto the Qt
+    event loop (``QTimer.singleShot``) rather than constructing it inline, which
+    keeps it clear of the failing call stack.
+    """
+
+    def show() -> None:
+        QMessageBox.critical(
+            None,
+            "Unexpected error",
+            "An unexpected error occurred:\n\n"
+            f"{msg}\n\n"
+            "Details have been written to the log "
+            "(Help ▸ View Logs…).",
+        )
+
+    QTimer.singleShot(0, show)
 
 
 def _app_icon() -> QIcon:
@@ -47,20 +88,48 @@ def main() -> int:
     app.setApplicationName("Painting Assist")
     app.setApplicationDisplayName("Painting Assist")
 
-    # Apply the persisted theme (system/light/dark) before any window shows, so
-    # the first paint is already in the right look. The theme lives in the JSON
-    # settings store; on the very first launch after upgrading (no store file
-    # yet) fall back to the legacy QSettings value so an existing preference is
-    # still honoured on that first paint (MainWindow then imports it into the
-    # store).
+    # Read the persisted theme + log-location override once. On the very first
+    # launch after upgrading (no store file yet) fall back to the legacy
+    # QSettings theme so an existing preference is honoured on the first paint.
     settings_path = os.path.join(_app_data_dir(), "settings.json")
+    configured_log_dir = ""
     if os.path.exists(settings_path):
         store = SettingsStore(settings_path)
         store.load()
         mode = str(store.get("preferences", "theme", DEFAULT_THEME))
+        configured_log_dir = str(store.get("preferences", "log_dir", ""))
     else:
         legacy = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         mode = str(legacy.value("settings/theme", DEFAULT_THEME))
+
+    # Configure logging as early as possible so startup problems and any
+    # uncaught exception land in a per-session file; then sweep old logs on a
+    # background thread and route Qt's own messages into the log too.
+    log_dir = logging_setup.resolve_log_dir(configured_log_dir, _app_data_dir())
+    session_path = logging_setup.configure(log_dir, notifier=_error_notifier)
+    qInstallMessageHandler(_qt_message_handler)
+    _log.info(
+        "Painting Assist %s starting (Python %s on %s)",
+        __version__,
+        platform.python_version(),
+        platform.platform(),
+    )
+    _log.info("Logging to %s", session_path)
+    logging_setup.cleanup_old_logs_async(log_dir)
+
+    # Surface a degraded colour-mixing engine in the log: without mixbox the app
+    # silently falls back to a cruder additive model, which is worth knowing when
+    # a user reports poor mix suggestions.
+    from painting_assist import mixing
+
+    if not mixing.MIXBOX_AVAILABLE:
+        _log.warning(
+            "mixbox unavailable — colour mixing is using the additive fallback"
+        )
+
+    # Apply the persisted theme before any window shows, so the first paint is
+    # already in the right look. MainWindow then imports the legacy value into
+    # the store on first run.
     if mode not in theme.THEME_MODES:
         mode = DEFAULT_THEME
     theme.apply_theme(app, mode)
@@ -71,6 +140,7 @@ def main() -> int:
     win.setWindowIcon(icon)
     win.resize(1280, 800)
     win.show()
+    _log.info("Main window shown; entering event loop")
     return app.exec()
 
 

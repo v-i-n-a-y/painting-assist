@@ -36,6 +36,38 @@ def main() -> int:
     assert blur_ed is not None and type(blur_ed).__name__ == "BlurEditor"
     assert values_ed is not None and type(values_ed).__name__ == "ValuesEditor"
 
+    # Canvas aspect-linking: once a crop is applied with the ratio locked, the
+    # crop fixes the aspect ratio, so editing one canvas dimension scales the
+    # other to keep the physical size proportional (for gridlines / measuring).
+    w._model.set_image((np.zeros((300, 400, 3), dtype=np.uint8)), "crop-test.png")
+    crop = w._pipeline.control("crop")
+    crop.set("rw", 0.5)  # a real crop -> has_crop() True
+    crop.set("lock_ratio", True)
+    crop.set("canvas_w", 40.0)
+    crop.set("canvas_h", 30.0)
+    crop_ed.refresh()  # sync spinboxes + remembered ratio (4:3)
+    # Lock is only editable while adjusting a crop; a committed crop greys it out
+    # so the canvas ratio cannot be knocked out of step with the crop.
+    assert crop_ed.lock.isEnabled() is False
+    crop_ed.width.setValue(60.0)  # user widens the canvas
+    assert abs(crop_ed.height.value() - 45.0) < 1e-6  # height followed 4:3
+    assert abs(float(crop.get("canvas_h")) - 45.0) < 1e-6
+    # An applied crop keeps the dimensions linked regardless of the (now frozen)
+    # lock flag — a freeform crop's baked aspect must be preserved too.
+    crop.set("lock_ratio", False)
+    crop_ed.refresh()
+    crop_ed.width.setValue(30.0)
+    assert abs(crop_ed.height.value() - 22.5) < 1e-6  # still 4:3
+
+    # Freeform box drag drives the canvas Height from the box's pixel aspect.
+    crop.set("lock_ratio", False)
+    crop.set("canvas_w", 40.0)
+    img_h, img_w = w._model.original().shape[:2]
+    # A box half as wide and full height -> pixel aspect 0.5 * (img_w/img_h).
+    w._on_crop_rect_changed(0.0, 0.0, 0.5, 1.0)
+    expected_aspect = (0.5 * img_w) / (1.0 * img_h)
+    assert abs(float(crop.get("canvas_h")) - 40.0 / expected_aspect) < 1e-6
+
     # The Values mono-colour picker: saving a colour flows back to My Paints and
     # a custom hex is honoured by the control. Start from a known custom colour.
     n_before = len(w._paints)
@@ -178,6 +210,36 @@ def main() -> int:
     w._last_image = ref
     w._on_colour_sampled(0.5, 0.5)
     assert _json.loads(lp.get("samples_json"))  # a sampled colour was appended
+
+    # Logging: settings dialog exposes a log-location override that resets to
+    # default, and the Help ▸ View Logs viewer renders + level-filters a session.
+    from painting_assist import logging_setup
+    from painting_assist.widgets.settings_dialog import SettingsDialog
+    from painting_assist.widgets.log_viewer import LogViewer
+
+    dlg = SettingsDialog(log_dir="", default_log_dir="/tmp/pa-logs")
+    assert dlg.values()["log_dir"] == ""  # empty override => default
+    dlg._on_reset_log_dir()
+    assert dlg.values()["log_dir"] == ""
+
+    import tempfile as _tempfile
+    import logging as _logging
+
+    log_dir = os.path.join(_tempfile.mkdtemp(prefix="pa_logs_"), "logs")
+    session = logging_setup.configure(log_dir)
+    _logging.getLogger("painting_assist.smoke").warning("smoke warning line")
+    _logging.getLogger("painting_assist.smoke").info("smoke info line")
+    for _h in _logging.getLogger().handlers:
+        _h.flush()
+    viewer = LogViewer(log_dir, session)
+    viewer._reload()
+    assert "smoke warning line" in viewer._view.toPlainText()
+    # Unchecking every level but WARNING drops the INFO line from the view.
+    for name, box in viewer._level_checks.items():
+        box.setChecked(name == "WARNING")
+    viewer._reload()
+    shown = viewer._view.toPlainText()
+    assert "smoke warning line" in shown and "smoke info line" not in shown
 
     result = {"rc": 1}
 

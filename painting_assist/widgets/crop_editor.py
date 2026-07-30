@@ -58,6 +58,11 @@ class CropEditor(QWidget):
         self._control = control
         self._suppress = False
         self._editing = False
+        # Last width/height seen, so a linked edit can preserve the pre-change
+        # aspect ratio (see :meth:`_linked`). Kept in sync in refresh() and
+        # after every handled dimension change.
+        self._prev_w = 0.0
+        self._prev_h = 0.0
 
         root = QVBoxLayout(self)
 
@@ -123,17 +128,40 @@ class CropEditor(QWidget):
     # User callbacks (guarded by the anti-feedback flag)
     # ------------------------------------------------------------------ #
     def _on_width(self, value: float) -> None:
-        """Report a change to the canvas width."""
+        """Report a change to the canvas width.
+
+        Once a crop has been applied with the ratio locked, the aspect ratio is
+        fixed by that crop, so the height is scaled to match — this keeps the
+        physical canvas size proportional for the gridline/measure tools.
+        """
         if self._suppress:
             return
-        self.paramChanged.emit("canvas_w", float(value))
+        value = float(value)
+        self.paramChanged.emit("canvas_w", value)
+        if self._linked() and self._prev_h > 0:
+            ratio = self._prev_w / self._prev_h
+            if ratio > 0:
+                new_h = self._clamped(self.height, value / ratio)
+                self._set_spin(self.height, new_h)
+                self.paramChanged.emit("canvas_h", new_h)
+        self._prev_w = float(self.width.value())
+        self._prev_h = float(self.height.value())
         self._update_info()
 
     def _on_height(self, value: float) -> None:
-        """Report a change to the canvas height."""
+        """Report a change to the canvas height (linked to width once cropped)."""
         if self._suppress:
             return
-        self.paramChanged.emit("canvas_h", float(value))
+        value = float(value)
+        self.paramChanged.emit("canvas_h", value)
+        if self._linked() and self._prev_h > 0:
+            ratio = self._prev_w / self._prev_h
+            if ratio > 0:
+                new_w = self._clamped(self.width, value * ratio)
+                self._set_spin(self.width, new_w)
+                self.paramChanged.emit("canvas_w", new_w)
+        self._prev_w = float(self.width.value())
+        self._prev_h = float(self.height.value())
         self._update_info()
 
     def _on_unit(self, _index: int) -> None:
@@ -157,11 +185,13 @@ class CropEditor(QWidget):
             self._editing = True
             self.edit_btn.setChecked(True)
             self.edit_btn.setText(self._APPLY_TEXT)
+            self._update_lock_enabled()
             self.editRequested.emit(True)
         else:
             self._editing = False
             self.edit_btn.setChecked(False)
             self.edit_btn.setText(self._ADJUST_TEXT)
+            self._update_lock_enabled()
             self.editRequested.emit(False)
 
     def _on_clear(self) -> None:
@@ -175,6 +205,49 @@ class CropEditor(QWidget):
         if self._editing:
             self.editRequested.emit(False)
             self.set_editing(False)
+
+    # ------------------------------------------------------------------ #
+    # Aspect-linking helpers
+    # ------------------------------------------------------------------ #
+    def _linked(self) -> bool:
+        """Whether the width/height spinboxes should move together.
+
+        True once a crop has been applied and we are NOT mid-edit: the crop
+        fixes the aspect ratio (freeform or locked alike), so resizing the
+        canvas for gridlines must preserve it. While cropping, the dimensions
+        stay free so the user can define/reshape the ratio.
+        """
+        if self._editing:
+            return False
+        return bool(getattr(self._control, "has_crop", lambda: False)())
+
+    def _update_lock_enabled(self) -> None:
+        """Lock is only meaningful while adjusting a crop.
+
+        Freeform-vs-locked decides how the crop box behaves as you drag it.
+        Once a crop is applied its aspect is baked in, so the toggle is greyed
+        out to stop the canvas ratio being knocked out of step with the crop.
+        """
+        self.lock.setEnabled(self._editing)
+        self.lock.setToolTip(
+            "On: crop box is locked to the canvas ratio. Off: freeform crop."
+            if self._editing
+            else "Available while adjusting a crop; the applied crop fixes the ratio."
+        )
+
+    @staticmethod
+    def _clamped(spin, value: float) -> float:
+        """Clamp ``value`` to a spinbox's valid range."""
+        return max(spin.minimum(), min(spin.maximum(), float(value)))
+
+    def _set_spin(self, spin, value: float) -> None:
+        """Set a spinbox value without re-triggering its user callback."""
+        was = self._suppress
+        self._suppress = True
+        try:
+            spin.setValue(float(value))
+        finally:
+            self._suppress = was
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -197,11 +270,14 @@ class CropEditor(QWidget):
                 self.unit.setCurrentIndex(idx)
 
             self.lock.setChecked(bool(self._control.get("lock_ratio")))
+            self._prev_w = float(self.width.value())
+            self._prev_h = float(self.height.value())
         finally:
             self._suppress = False
 
         self.edit_btn.setText(self._APPLY_TEXT if self._editing else self._ADJUST_TEXT)
         self.edit_btn.setChecked(self._editing)
+        self._update_lock_enabled()
         self._update_info()
 
     def set_editing(self, editing: bool) -> None:
@@ -219,6 +295,7 @@ class CropEditor(QWidget):
             )
         finally:
             self._suppress = False
+        self._update_lock_enabled()
 
     # ------------------------------------------------------------------ #
     # Helpers

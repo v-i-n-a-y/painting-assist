@@ -144,6 +144,15 @@ class CropControl(Control):
         rx, ry, rw, rh = self.rect_norm()
         return rx <= 1e-4 and ry <= 1e-4 and rw >= 1.0 - 1e-4 and rh >= 1.0 - 1e-4
 
+    def has_crop(self) -> bool:
+        """True when a crop has been applied (the rect actually trims the image).
+
+        Independent of :attr:`enabled` (unlike :meth:`is_active`), so the editor
+        can tell whether a real crop exists and thus whether the canvas aspect
+        ratio is now fixed by it.
+        """
+        return not self._is_full_frame()
+
     # ------------------------------------------------------------------ #
     # Control overrides
     # ------------------------------------------------------------------ #
