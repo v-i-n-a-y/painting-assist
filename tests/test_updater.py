@@ -8,7 +8,16 @@ touch no network and need no QApplication (the pure helpers are Qt-free).
 
 from __future__ import annotations
 
-from painting_assist.updater import is_newer, parse_version, pick_asset
+from painting_assist.updater import (
+    CHANNEL_DEVELOPER,
+    CHANNEL_STABLE,
+    is_newer,
+    is_prerelease_tag,
+    is_update_candidate,
+    parse_version,
+    pick_asset,
+    pick_latest_release,
+)
 
 
 # ---------------------------------------------------------------------------- #
@@ -133,3 +142,94 @@ def test_pick_asset_normalises_aarch64():
 
 def test_pick_asset_empty_asset_list():
     assert pick_asset([], "darwin", "arm64") is None
+
+
+# ---------------------------------------------------------------------------- #
+# pick_latest_release (update channels)
+# ---------------------------------------------------------------------------- #
+def _release(tag, prerelease=False, draft=False):
+    return {"tag_name": tag, "prerelease": prerelease, "draft": draft}
+
+
+def test_pick_latest_release_stable_skips_prereleases():
+    releases = [
+        _release("v0.14.0-rc1", prerelease=True),
+        _release("v0.13.0"),
+    ]
+    assert pick_latest_release(releases, CHANNEL_STABLE)["tag_name"] == "v0.13.0"
+
+
+def test_pick_latest_release_developer_takes_prerelease():
+    releases = [
+        _release("v0.14.0-rc1", prerelease=True),
+        _release("v0.13.0"),
+    ]
+    assert pick_latest_release(releases, CHANNEL_DEVELOPER)["tag_name"] == "v0.14.0-rc1"
+
+
+def test_pick_latest_release_developer_takes_newer_stable():
+    # No prereleases out: the developer channel follows the stable latest.
+    releases = [_release("v0.14.0"), _release("v0.13.0")]
+    assert pick_latest_release(releases, CHANNEL_DEVELOPER)["tag_name"] == "v0.14.0"
+
+
+def test_pick_latest_release_skips_drafts_on_both_channels():
+    releases = [
+        _release("v0.15.0", draft=True),
+        _release("v0.14.0-rc1", prerelease=True),
+        _release("v0.13.0"),
+    ]
+    assert pick_latest_release(releases, CHANNEL_STABLE)["tag_name"] == "v0.13.0"
+    assert (
+        pick_latest_release(releases, CHANNEL_DEVELOPER)["tag_name"] == "v0.14.0-rc1"
+    )
+
+
+def test_pick_latest_release_empty_or_all_draft():
+    assert pick_latest_release([], CHANNEL_STABLE) is None
+    assert pick_latest_release([], CHANNEL_DEVELOPER) is None
+    only_draft = [_release("v0.14.0", draft=True)]
+    assert pick_latest_release(only_draft, CHANNEL_DEVELOPER) is None
+
+
+def test_pick_latest_release_honours_newest_first_order():
+    # The API lists newest first; the picker must not sort or look further.
+    releases = [_release("v0.13.0"), _release("v0.12.0")]
+    assert pick_latest_release(releases, CHANNEL_STABLE)["tag_name"] == "v0.13.0"
+
+
+# ---------------------------------------------------------------------------- #
+# is_update_candidate
+# ---------------------------------------------------------------------------- #
+def test_candidate_stable_strictly_newer_only():
+    assert is_update_candidate("v0.14.0", "0.13.0", CHANNEL_STABLE)
+    assert not is_update_candidate("v0.13.0", "0.13.0", CHANNEL_STABLE)
+    assert not is_update_candidate("v0.12.0", "0.13.0", CHANNEL_STABLE)
+
+
+def test_candidate_developer_offers_rc_to_final():
+    # Same version, different tag: the final supersedes the rc.
+    assert is_update_candidate("v0.14.0", "0.14.0-rc1", CHANNEL_DEVELOPER)
+    # ...but the stable channel never offers a same-version re-tag.
+    assert not is_update_candidate("v0.14.0", "0.14.0-rc1", CHANNEL_STABLE)
+
+
+def test_candidate_developer_newer_and_same_tag():
+    assert is_update_candidate("v0.15.0-rc1", "0.13.0", CHANNEL_DEVELOPER)
+    assert not is_update_candidate("v0.14.0-rc1", "0.14.0-rc1", CHANNEL_DEVELOPER)
+    assert not is_update_candidate("v0.12.0", "0.13.0", CHANNEL_DEVELOPER)
+
+
+def test_candidate_empty_tag_never():
+    assert not is_update_candidate("", "0.13.0", CHANNEL_STABLE)
+    assert not is_update_candidate("", "0.13.0", CHANNEL_DEVELOPER)
+
+
+# ---------------------------------------------------------------------------- #
+# is_prerelease_tag
+# ---------------------------------------------------------------------------- #
+def test_prerelease_tag_recognises_suffixes():
+    for tag in ("v0.14.0-rc1", "0.14.0-dev2", "v0.14.0-alpha", "0.14.0-beta.1"):
+        assert is_prerelease_tag(tag), tag
+    for tag in ("v0.14.0", "0.13.0", ""):
+        assert not is_prerelease_tag(tag), tag

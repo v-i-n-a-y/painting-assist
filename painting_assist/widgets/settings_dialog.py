@@ -45,6 +45,12 @@ UPDATE_INTERVALS = [
     ("Never", 0.0),
 ]
 
+# (label, channel) — which releases the update check follows.
+UPDATE_CHANNELS = [
+    ("Stable", "stable"),
+    ("Developer (pre-releases)", "developer"),
+]
+
 THEME_CHOICES = [
     ("Match system", "system"),
     ("Light", "light"),
@@ -77,6 +83,14 @@ def theme_index(mode: str) -> int:
     return 0
 
 
+def channel_index(channel: str) -> int:
+    """Return the UPDATE_CHANNELS index for ``channel``, defaulting to stable."""
+    for i, (_label, value) in enumerate(UPDATE_CHANNELS):
+        if value == channel:
+            return i
+    return 0
+
+
 def _miss_index(mode: str) -> int:
     """Return the MISS_CHOICES index for ``mode``, defaulting to closest."""
     for i, (_label, value) in enumerate(MISS_CHOICES):
@@ -95,6 +109,7 @@ class SettingsDialog(QDialog):
         tolerance_pct: int = DEFAULT_TOLERANCE_PCT,
         on_miss: str = DEFAULT_ON_MISS,
         convert_unit: bool = True,
+        update_channel: str = "stable",
         log_dir: str = "",
         default_log_dir: str = "",
         parent: Optional[QWidget] = None,
@@ -121,6 +136,17 @@ class SettingsDialog(QDialog):
             self._interval_combo.addItem(label)
         self._interval_combo.setCurrentIndex(nearest_interval_index(update_hours))
         form.addRow("Check for updates", self._interval_combo)
+
+        self._channel_combo = QComboBox()
+        for label, _value in UPDATE_CHANNELS:
+            self._channel_combo.addItem(label)
+        self._channel_combo.setCurrentIndex(channel_index(update_channel))
+        self._channel_combo.setToolTip(
+            "Stable follows the latest finished release. Developer also follows "
+            "pre-releases (rc and dev builds), so it gets new features earlier "
+            "with more risk."
+        )
+        form.addRow("Update channel", self._channel_combo)
 
         # Colour matching: how close a mix must be, and what to do if it can't.
         self._tolerance_spin = QSpinBox()
@@ -209,10 +235,11 @@ class SettingsDialog(QDialog):
         self._refresh_log_path_edit()
 
     def values(self) -> Dict[str, object]:
-        """Return the chosen settings (theme, update interval, mix tolerance)."""
+        """Return the chosen settings (theme, update checking, mix tolerance)."""
         return {
             "theme": THEME_CHOICES[self._theme_combo.currentIndex()][1],
             "update_hours": UPDATE_INTERVALS[self._interval_combo.currentIndex()][1],
+            "update_channel": UPDATE_CHANNELS[self._channel_combo.currentIndex()][1],
             "tolerance_pct": int(self._tolerance_spin.value()),
             "on_miss": MISS_CHOICES[self._miss_combo.currentIndex()][1],
             "convert_unit": self._convert_unit.isChecked(),

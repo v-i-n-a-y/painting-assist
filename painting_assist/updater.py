@@ -14,8 +14,9 @@ Layers, from pure to side-effecting:
 
 1. **Pure helpers** — :func:`parse_version`, :func:`is_newer`, :func:`pick_asset`.
    No network, no Qt; fully unit-testable.
-2. **:class:`UpdateChecker`** — asks GitHub for the latest release off-thread and
-   emits :attr:`~UpdateChecker.updateAvailable` / :attr:`~UpdateChecker.upToDate`
+2. **:class:`UpdateChecker`** — asks GitHub for the latest release of the
+   configured channel (``stable`` or ``developer``) off-thread and emits
+   :attr:`~UpdateChecker.updateAvailable` / :attr:`~UpdateChecker.upToDate`
    / :attr:`~UpdateChecker.checkFailed`. Network failures are turned into
    ``checkFailed`` — they never raise into the GUI.
 3. **Download + open** — :meth:`UpdateChecker.downloadAndOpen` fetches an asset
@@ -34,6 +35,7 @@ from __future__ import annotations
 import logging
 import os
 import platform as _platform_mod
+import re
 import subprocess
 import sys
 import tempfile
@@ -52,11 +54,20 @@ from painting_assist import __version__
 
 _log = logging.getLogger(__name__)
 
+# The releases *list* endpoint (newest first, prereleases included) rather than
+# /releases/latest: one call serves both channels, and the channel decision
+# (skip prereleases or not) stays in the pure, testable pick_latest_release.
 RELEASES_API_URL = (
-    "https://api.github.com/repos/v-i-n-a-y/painting-assist/releases/latest"
+    "https://api.github.com/repos/v-i-n-a-y/painting-assist/releases?per_page=30"
 )
 _USER_AGENT = "PaintingAssist-Updater"
 _NET_TIMEOUT = 10  # seconds
+
+# Update channels. "stable" follows the latest finished release; "developer"
+# also follows prereleases (rc/dev builds), so it leads stable.
+CHANNEL_STABLE = "stable"
+CHANNEL_DEVELOPER = "developer"
+CHANNELS = (CHANNEL_STABLE, CHANNEL_DEVELOPER)
 
 
 # ---------------------------------------------------------------------------- #
@@ -113,6 +124,51 @@ def is_newer(remote: str, local: str) -> bool:
     r += (0,) * (n - len(r))
     loc += (0,) * (n - len(loc))
     return r > loc
+
+
+def pick_latest_release(releases: list, channel: str) -> Optional[dict]:
+    """Pick the release to offer for ``channel`` from a GitHub releases list.
+
+    ``releases`` is the newest-first list from the releases API; each item
+    carries ``draft`` and ``prerelease`` booleans. The stable channel skips
+    prereleases (and drafts); the developer channel skips only drafts, so it
+    leads stable by whatever prereleases are currently out. Returns the chosen
+    release dict, or ``None`` when the list holds nothing for the channel.
+    """
+    skip_prerelease = channel != CHANNEL_DEVELOPER
+    for release in releases or []:
+        if not isinstance(release, dict):
+            continue
+        if release.get("draft"):
+            continue
+        if skip_prerelease and release.get("prerelease"):
+            continue
+        return release
+    return None
+
+
+def is_update_candidate(remote_tag: str, local_version: str, channel: str) -> bool:
+    """Whether ``remote_tag`` should be offered to a running ``local_version``.
+
+    Stable: strictly newer only. Developer: strictly newer, or the same
+    version under a different tag — that is how a user moves from
+    ``0.14.0-rc1`` onto the ``0.14.0`` final without the check concluding the
+    rc already is the latest.
+    """
+    if not remote_tag:
+        return False
+    if is_newer(remote_tag, local_version):
+        return True
+    if channel == CHANNEL_DEVELOPER:
+        same_version = parse_version(remote_tag) == parse_version(local_version)
+        different_tag = remote_tag.strip().lstrip("vV") != local_version.strip()
+        return same_version and different_tag
+    return False
+
+
+def is_prerelease_tag(tag: str) -> bool:
+    """Heuristic: does ``tag`` look like a prerelease (rc, dev, alpha, beta)?"""
+    return bool(re.search(r"(rc|dev|alpha|beta|pre)", tag or "", re.IGNORECASE))
 
 
 def pick_asset(
@@ -235,13 +291,16 @@ class _CheckTask(QRunnable):
     raised, so a failed check never crashes the GUI.
     """
 
-    def __init__(self, local_version: str, signals: _CheckSignals) -> None:
+    def __init__(
+        self, local_version: str, channel: str, signals: _CheckSignals
+    ) -> None:
         super().__init__()
         self._local_version = local_version
+        self._channel = channel
         self._signals = signals
 
     def run(self) -> None:  # noqa: D401 - QRunnable entry point
-        """Query GitHub, pick the asset, and emit ``done`` (never raises out)."""
+        """Query GitHub, pick the release and asset, emit ``done`` (no raises)."""
         import json
 
         try:
@@ -255,8 +314,13 @@ class _CheckTask(QRunnable):
             self._signals.done.emit(None, None, str(exc))
             return
 
-        tag = payload.get("tag_name") or payload.get("name") or ""
-        assets = payload.get("assets") or []
+        releases = payload if isinstance(payload, list) else []
+        release = pick_latest_release(releases, self._channel)
+        if release is None:
+            self._signals.done.emit(None, None, "No releases found yet.")
+            return
+        tag = release.get("tag_name") or release.get("name") or ""
+        assets = release.get("assets") or []
         asset = pick_asset(assets, sys.platform, _platform_mod.machine())
         self._signals.done.emit(tag, asset, None)
 
@@ -355,9 +419,11 @@ class UpdateChecker(QObject):
         self,
         local_version: str = __version__,
         parent: Optional[QObject] = None,
+        channel: str = CHANNEL_STABLE,
     ) -> None:
         super().__init__(parent)
         self._local_version = local_version
+        self._channel = channel if channel in CHANNELS else CHANNEL_STABLE
         self._pool = QThreadPool.globalInstance()
 
         self._check_signals = _CheckSignals()
@@ -370,14 +436,23 @@ class UpdateChecker(QObject):
     # ------------------------------------------------------------------ #
     # Public API (GUI thread)
     # ------------------------------------------------------------------ #
+    def set_channel(self, channel: str) -> None:
+        """Switch the update channel (``stable`` or ``developer``).
+
+        Applies to future checks; an unknown value falls back to stable.
+        """
+        self._channel = channel if channel in CHANNELS else CHANNEL_STABLE
+
     def check(self) -> None:
-        """Start an off-thread check for a newer release.
+        """Start an off-thread check for a newer release on the current channel.
 
         Emits exactly one of :attr:`updateAvailable`, :attr:`upToDate`, or
         :attr:`checkFailed` on the GUI thread once the network call resolves.
         Works whether or not the app is frozen.
         """
-        self._pool.start(_CheckTask(self._local_version, self._check_signals))
+        self._pool.start(
+            _CheckTask(self._local_version, self._channel, self._check_signals)
+        )
 
     def downloadAndOpen(self, asset: dict) -> None:
         """Download ``asset`` off-thread, emitting :attr:`downloadProgress`.
@@ -398,7 +473,7 @@ class UpdateChecker(QObject):
             self.checkFailed.emit(str(error))
             return
         tag = str(version or "")
-        if tag and is_newer(tag, self._local_version):
+        if tag and is_update_candidate(tag, self._local_version, self._channel):
             if isinstance(asset, dict):
                 self.updateAvailable.emit(tag, asset)
             else:

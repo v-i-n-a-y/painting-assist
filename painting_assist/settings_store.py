@@ -36,6 +36,7 @@ DEFAULTS: dict = {
     "preferences": {
         "theme": "system",
         "update_hours": 24.0,
+        "update_channel": "stable",  # "stable" or "developer" (pre-releases)
         "last_update_check": 0.0,
         "tolerance_pct": 25,
         "on_miss": "closest",

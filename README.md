@@ -204,9 +204,12 @@ settings and last image are all restored on the next launch.
 
 Settings lives under File and lets you pick the theme, either matching the
 system or forcing light or dark, and choose how often the app checks for updates,
-from every launch through to never. When a newer release is found the app offers
-to download the right installer for your platform and open it, and Check for
-Updates under Help runs the same check on demand.
+from every launch through to never. The update channel picks which releases the
+check follows: Stable for finished releases, or Developer to also get
+pre-releases (rc and dev builds) as soon as they are published — they are
+labelled as developer builds in the update prompt. When a newer release is
+found the app offers to download the right installer for your platform and open
+it, and Check for Updates under Help runs the same check on demand.
 
 Export Blur Steps writes the whole coarse to fine progression in one go. Set the
 Blur control to Stepped mode, press the button, choose a folder, and you get one

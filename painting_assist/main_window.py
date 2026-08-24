@@ -354,6 +354,9 @@ class MainWindow(QMainWindow):
             self._update_hours = float(prefs.get("update_hours", DEFAULT_UPDATE_HOURS))
         except (TypeError, ValueError):
             self._update_hours = DEFAULT_UPDATE_HOURS
+        self._update_channel = str(prefs.get("update_channel", "stable"))
+        if self._update_channel not in updater.CHANNELS:
+            self._update_channel = "stable"
 
         # ---- colour-matching settings + paint inventory ----
         try:
@@ -388,7 +391,9 @@ class MainWindow(QMainWindow):
         self._measure_edges = bool(prefs.get("measure_edges", True))
 
         # ---- update checker (off-thread; signals land on the GUI thread) ----
-        self._updater = updater.UpdateChecker(__version__, self)
+        self._updater = updater.UpdateChecker(
+            __version__, self, channel=self._update_channel
+        )
         self._updater.updateAvailable.connect(self._on_update_available)
         self._updater.upToDate.connect(self._on_up_to_date)
         self._updater.checkFailed.connect(self._on_update_check_failed)
@@ -1433,6 +1438,7 @@ class MainWindow(QMainWindow):
             self._tolerance_pct,
             self._on_miss,
             convert_unit=self._convert_unit,
+            update_channel=self._update_channel,
             log_dir=str(prefs.get("log_dir", "")),
             default_log_dir=logging_setup.default_log_dir(_app_data_dir()),
             parent=self,
@@ -1442,12 +1448,16 @@ class MainWindow(QMainWindow):
         values = dialog.values()
         self._theme_mode = str(values["theme"])
         self._update_hours = float(values["update_hours"])
+        self._update_channel = str(values["update_channel"])
+        if self._update_channel not in updater.CHANNELS:
+            self._update_channel = "stable"
         self._tolerance_pct = int(values["tolerance_pct"])
         self._on_miss = str(values["on_miss"])
         self._convert_unit = bool(values["convert_unit"])
 
         prefs["theme"] = self._theme_mode
         prefs["update_hours"] = self._update_hours
+        prefs["update_channel"] = self._update_channel
         prefs["tolerance_pct"] = self._tolerance_pct
         prefs["on_miss"] = self._on_miss
         prefs["convert_unit"] = self._convert_unit
@@ -1457,6 +1467,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             theme.apply_theme(app, self._theme_mode)
+        self._updater.set_channel(self._update_channel)
         self._apply_update_schedule(startup=False)
         # Refresh any showing mix suggestion with the new tolerance/behaviour.
         if self._last_sample_rgb is not None:
@@ -1654,21 +1665,28 @@ class MainWindow(QMainWindow):
 
     def _on_update_available(self, version: str, asset: dict) -> None:
         """A newer release exists: offer to download and open its installer."""
+        # Tag prerelease versions so a stable-channel user never sees one and
+        # a developer-channel user knows what they are installing.
+        tag_note = " (developer build)" if updater.is_prerelease_tag(version) else ""
         if not updater.running_frozen():
             # Source checkout: installing over it makes no sense; just say so.
             QMessageBox.information(
                 self,
                 "Update available",
-                "Version {} is available (you are on {}).\n"
+                "Version {}{} is available (you are on {}).\n"
                 "You are running from source — update with git pull, or grab "
-                "an installer from the releases page.".format(version, __version__),
+                "an installer from the releases page.".format(
+                    version, tag_note, __version__
+                ),
             )
             return
         answer = QMessageBox.question(
             self,
             "Update available",
-            "Version {} is available (you are on {}).\n"
-            "Download and open the installer now?".format(version, __version__),
+            "Version {}{} is available (you are on {}).\n"
+            "Download and open the installer now?".format(
+                version, tag_note, __version__
+            ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )
@@ -1681,7 +1699,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Up to date",
-                "You are on the latest version ({}).".format(version),
+                "You are on the latest {} version ({}).".format(
+                    self._update_channel, version
+                ),
             )
 
     def _on_update_check_failed(self, message: str) -> None:
