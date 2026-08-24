@@ -9,6 +9,7 @@ never blocks. Skips cleanly (prints SKIP) if no Qt platform can be initialised.
 
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -96,6 +97,26 @@ def main() -> int:
     assert abs(float(crop.get("canvas_h")) - 60.0) < 1e-9
     crop_ed.unit.setCurrentIndex(0)  # back to cm
     w._convert_unit = True
+
+    # Priming: the recommendation tracks the processed frame. Wait for the
+    # first full render, then check the swatch readout and the in-place
+    # recompute on technique change (the control is an identity stage, so no
+    # render is needed for that).
+    deadline = time.time() + 10.0
+    while w._prime_image is None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert w._prime_image is not None
+    prime_ed = w._panel.editor("prime")
+    assert prime_ed is not None and prime_ed._result is not None
+    assert prime_ed._result.hex.startswith("#")
+    assert len(prime_ed._result.hex) == 7
+    # Drive the technique combo through the real signal path (index 5 = neutral).
+    prime_ed._param_widgets["technique"]._combo.setCurrentIndex(5)
+    assert w._pipeline.control("prime").get("technique") == "neutral"
+    assert prime_ed._result is not None
+    r, g, b = prime_ed._result.rgb
+    assert abs(r - g) <= 1 and abs(g - b) <= 1  # a neutral ground is a grey
 
     # The Values mono-colour picker: saving a colour flows back to My Paints and
     # a custom hex is honoured by the control. Start from a known custom colour.

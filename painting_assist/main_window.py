@@ -69,6 +69,7 @@ from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
 from painting_assist.measure import DISPLAY_UNITS, Calibration, convert_canvas_size
 from painting_assist.pipeline import ControlPipeline
+from painting_assist.priming import prime_colour
 from painting_assist.print_layout import tile_grid
 from painting_assist.settings_store import SettingsStore
 from painting_assist.render_controller import RenderController
@@ -293,6 +294,16 @@ class MainWindow(QMainWindow):
             self._grid_control = None
         # The grid's custom editor carries the canvas-position readout.
         self._grid_editor = self._panel.editor("grid")
+
+        # Optional priming tool glue (present only if a "prime" control exists).
+        # The recommendation is computed from each rendered frame and pushed to
+        # the editor's swatch readout.
+        try:
+            self._prime_control = self._pipeline.control("prime")
+        except KeyError:
+            self._prime_control = None
+        self._prime_editor = self._panel.editor("prime")
+        self._prime_image: Optional[np.ndarray] = None
         # The values editor's Monochromatic colour picker draws on the painter's
         # My Paints inventory; wired up once the inventory is loaded below.
         self._values_editor = self._panel.editor("values")
@@ -1799,6 +1810,30 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------ #
+    # Priming tool glue
+    # ------------------------------------------------------------------ #
+    def _update_prime_result(self) -> None:
+        """Recompute the recommended ground colour and push it to the editor.
+
+        Runs on every full render (the recommendation tracks the processed
+        frame) and on technique/strength changes (no render needed — the
+        control is an identity stage).
+        """
+        if self._prime_editor is None or self._prime_control is None:
+            return
+        image = self._prime_image
+        if image is None:
+            self._prime_editor.set_result(None)
+            return
+        self._prime_editor.set_result(
+            prime_colour(
+                image,
+                str(self._prime_control.get("technique")),
+                int(self._prime_control.get("strength")),
+            )
+        )
+
+    # ------------------------------------------------------------------ #
     # Eyedropper
     # ------------------------------------------------------------------ #
     def _on_eyedropper_toggled(self, active: bool) -> None:
@@ -2493,6 +2528,11 @@ class MainWindow(QMainWindow):
             # overlay directly; no render needed.
             self._update_grid_overlay()
             return
+        if cid == "prime":
+            # The recommendation depends on the last rendered frame, not the
+            # pipeline (the control is an identity stage) — recompute in place.
+            self._update_prime_result()
+            return
         if self._crop_editing:
             # While cropping we show the untouched original + overlay; just keep
             # the overlay's locked aspect in step with the canvas dimensions.
@@ -2556,6 +2596,9 @@ class MainWindow(QMainWindow):
         # preview frames so the distribution reflects the real image).
         if was_full and image is not None:
             self._histogram.set_image(image)
+            # The priming recommendation tracks the processed frame.
+            self._prime_image = image
+            self._update_prime_result()
         if self._crop_editing:
             return
         # Remember the processed frame so the before/after toggle can restore it

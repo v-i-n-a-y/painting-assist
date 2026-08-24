@@ -26,5 +26,6 @@ from . import limited_palette  # noqa: F401  -- registers LimitedPaletteControl
 from . import values  # noqa: F401  -- registers ValuesControl
 from . import temperature  # noqa: F401  -- registers TemperatureMapControl
 from . import grid  # noqa: F401  -- registers GridControl
+from . import prime  # noqa: F401  -- registers PrimeControl
 from . import flip  # noqa: F401  -- registers FlipControl
 # add one import line here per new control

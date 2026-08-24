@@ -58,6 +58,16 @@ consolidate speckle before grouping. The colours it settles on show up as
 clickable swatches in the Palette panel below the image. Click one to copy its
 hex and read its value percentage, hue angle and chroma.
 
+### Priming, the ground colour
+
+Recommends what colour to prime the canvas with. It finds the reference's
+majority colour (its largest Lab k-means cluster) and re-expresses it per
+technique: mid-tone dead colour, majority tint, complementary ground, light or
+dark ground, or a plain neutral grey. The tint-strength slider sets how much of
+the majority colour's chroma the ground keeps (0 = neutral grey). The
+recommendation shows as a swatch with its hex code — copy it for your gesso
+tint. It tracks the processed reference, so it updates as you crop and adjust.
+
 ### Values, the value story
 
 - Greyscale replaces colour with a neutral grey of the same perceptual
