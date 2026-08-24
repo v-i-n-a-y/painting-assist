@@ -16,7 +16,7 @@ import json
 import math
 import os
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -67,7 +67,7 @@ from painting_assist import (
 from painting_assist.controls import registry
 from painting_assist.controls.grid import draw_grid
 from painting_assist.image_model import ImageModel
-from painting_assist.measure import DISPLAY_UNITS, Calibration
+from painting_assist.measure import DISPLAY_UNITS, Calibration, convert_canvas_size
 from painting_assist.pipeline import ControlPipeline
 from painting_assist.print_layout import tile_grid
 from painting_assist.settings_store import SettingsStore
@@ -350,6 +350,8 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             self._tolerance_pct = DEFAULT_TOLERANCE_PCT
         self._on_miss = str(prefs.get("on_miss", DEFAULT_ON_MISS))
+        # Convert the canvas size when the crop unit changes (see Settings).
+        self._convert_unit = bool(prefs.get("convert_unit", True))
         self._paints = self._paints_from_store()
         # Names of paints the painter has hidden from the Monochromatic mode
         # colour picker (managed via the My Paints dialog). The full inventory is
@@ -1419,6 +1421,7 @@ class MainWindow(QMainWindow):
             self._update_hours,
             self._tolerance_pct,
             self._on_miss,
+            convert_unit=self._convert_unit,
             log_dir=str(prefs.get("log_dir", "")),
             default_log_dir=logging_setup.default_log_dir(_app_data_dir()),
             parent=self,
@@ -1430,11 +1433,13 @@ class MainWindow(QMainWindow):
         self._update_hours = float(values["update_hours"])
         self._tolerance_pct = int(values["tolerance_pct"])
         self._on_miss = str(values["on_miss"])
+        self._convert_unit = bool(values["convert_unit"])
 
         prefs["theme"] = self._theme_mode
         prefs["update_hours"] = self._update_hours
         prefs["tolerance_pct"] = self._tolerance_pct
         prefs["on_miss"] = self._on_miss
+        prefs["convert_unit"] = self._convert_unit
         prefs["log_dir"] = str(values["log_dir"])
         self._save_store()
 
@@ -2474,10 +2479,15 @@ class MainWindow(QMainWindow):
 
     def _on_param(self, cid: str, name: str, value: object) -> None:
         """A param value changed: update the pipeline and request a render."""
-        self._pipeline.set_value(cid, name, value)
-        if cid == "crop" and name in ("canvas_w", "canvas_h", "unit"):
-            # The canvas size/unit drives the physical measure-tool readouts.
-            self._update_measure_calibration()
+        if cid == "crop" and name == "unit":
+            # A unit change may also convert the canvas dimensions (settings-
+            # gated); the converter owns this param's set_value.
+            self._convert_canvas_unit(str(value))
+        else:
+            self._pipeline.set_value(cid, name, value)
+            if cid == "crop" and name in ("canvas_w", "canvas_h"):
+                # The canvas size drives the physical measure-tool readouts.
+                self._update_measure_calibration()
         if cid == "grid":
             # The grid is a viewer overlay, not a pipeline stage — repaint the
             # overlay directly; no render needed.
@@ -2643,6 +2653,43 @@ class MainWindow(QMainWindow):
         self._pipeline.set_value("crop", "canvas_h", canvas_w / aspect)
         if self._crop_editor is not None:
             self._crop_editor.refresh()
+        self._update_measure_calibration()
+
+    def _crop_pixel_size(self) -> Optional[Tuple[float, float]]:
+        """The applied crop's pixel size, or ``None`` when no image is loaded."""
+        original = self._model.original()
+        if original is None or self._crop_control is None:
+            return None
+        img_h, img_w = original.shape[:2]
+        _, _, rw, rh = self._crop_control.rect_norm()
+        return (rw * img_w, rh * img_h)
+
+    def _convert_canvas_unit(self, new_unit: str) -> None:
+        """Apply a crop unit change, converting the canvas size when enabled.
+
+        With the "convert canvas size on unit change" preference on, the width
+        and height are re-expressed in the new unit so the physical canvas size
+        is preserved (cm/mm/in convert exactly; "px" adopts the applied crop's
+        pixel size; "ratio" keeps the numbers, which already express the ratio).
+        With the preference off the unit is a display-only change.
+        """
+        if self._crop_control is None:
+            return
+        old_unit = str(self._crop_control.get("unit"))
+        if old_unit == new_unit:
+            return
+        self._pipeline.set_value("crop", "unit", new_unit)
+        if self._convert_unit:
+            w = float(self._crop_control.get("canvas_w"))
+            h = float(self._crop_control.get("canvas_h"))
+            new_w, new_h = convert_canvas_size(
+                w, h, old_unit, new_unit, self._crop_pixel_size()
+            )
+            if (new_w, new_h) != (w, h):
+                self._pipeline.set_value("crop", "canvas_w", new_w)
+                self._pipeline.set_value("crop", "canvas_h", new_h)
+                if self._crop_editor is not None:
+                    self._crop_editor.refresh()
         self._update_measure_calibration()
 
     # ------------------------------------------------------------------ #

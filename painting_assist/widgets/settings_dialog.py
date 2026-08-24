@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -93,6 +94,7 @@ class SettingsDialog(QDialog):
         update_hours: float = DEFAULT_UPDATE_HOURS,
         tolerance_pct: int = DEFAULT_TOLERANCE_PCT,
         on_miss: str = DEFAULT_ON_MISS,
+        convert_unit: bool = True,
         log_dir: str = "",
         default_log_dir: str = "",
         parent: Optional[QWidget] = None,
@@ -135,6 +137,18 @@ class SettingsDialog(QDialog):
             self._miss_combo.addItem(label)
         self._miss_combo.setCurrentIndex(_miss_index(on_miss))
         form.addRow("If unreachable", self._miss_combo)
+
+        # Canvas & Crop: whether changing the unit converts the entered size.
+        self._convert_unit = QCheckBox(
+            "Convert canvas size when the crop unit changes"
+        )
+        self._convert_unit.setChecked(bool(convert_unit))
+        self._convert_unit.setToolTip(
+            "When the crop unit changes (cm, mm, inch, px), re-express the canvas "
+            "width and height in the new unit so the physical size is preserved. "
+            "Turn off to make the unit a display-only change."
+        )
+        form.addRow(self._convert_unit)
 
         # Log location: a read-only display of the effective folder plus Browse
         # / Reset. Changing it is stored as an override ("" = default) and the
@@ -201,5 +215,6 @@ class SettingsDialog(QDialog):
             "update_hours": UPDATE_INTERVALS[self._interval_combo.currentIndex()][1],
             "tolerance_pct": int(self._tolerance_spin.value()),
             "on_miss": MISS_CHOICES[self._miss_combo.currentIndex()][1],
+            "convert_unit": self._convert_unit.isChecked(),
             "log_dir": self._log_dir,
         }

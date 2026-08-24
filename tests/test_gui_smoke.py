@@ -39,7 +39,19 @@ def main() -> int:
     # Canvas aspect-linking: once a crop is applied with the ratio locked, the
     # crop fixes the aspect ratio, so editing one canvas dimension scales the
     # other to keep the physical size proportional (for gridlines / measuring).
-    w._model.set_image((np.zeros((300, 400, 3), dtype=np.uint8)), "crop-test.png")
+    # The image is a real file on disk: the project round-trip below re-loads
+    # it by path, and a missing file would raise a modal warning dialog.
+    import tempfile as _tempfile
+
+    import cv2 as _cv2
+
+    _img_dir = _tempfile.mkdtemp(prefix="pa_smoke_")
+    _crop_img_path = os.path.join(_img_dir, "crop-test.png")
+    _cv2.imwrite(
+        _crop_img_path,
+        _cv2.cvtColor(np.zeros((300, 400, 3), dtype=np.uint8), _cv2.COLOR_RGB2BGR),
+    )
+    w._model.set_image(np.zeros((300, 400, 3), dtype=np.uint8), _crop_img_path)
     crop = w._pipeline.control("crop")
     crop.set("rw", 0.5)  # a real crop -> has_crop() True
     crop.set("lock_ratio", True)
@@ -67,6 +79,23 @@ def main() -> int:
     w._on_crop_rect_changed(0.0, 0.0, 0.5, 1.0)
     expected_aspect = (0.5 * img_w) / (1.0 * img_h)
     assert abs(float(crop.get("canvas_h")) - 40.0 / expected_aspect) < 1e-6
+
+    # Unit conversion: switching the crop unit re-expresses the canvas size in
+    # the new unit (settings-gated), preserving the physical size. The canvas
+    # is 40 x 60 cm here (the freeform sync above set the height).
+    crop_ed.unit.setCurrentIndex(1)  # cm -> in
+    assert abs(float(crop.get("canvas_w")) - 40.0 / 2.54) < 1e-9
+    assert abs(float(crop.get("canvas_h")) - 60.0 / 2.54) < 1e-9
+    crop_ed.unit.setCurrentIndex(0)  # in -> cm restores the original numbers
+    assert abs(float(crop.get("canvas_w")) - 40.0) < 1e-9
+    assert abs(float(crop.get("canvas_h")) - 60.0) < 1e-9
+    # With conversion disabled the unit change is display-only.
+    w._convert_unit = False
+    crop_ed.unit.setCurrentIndex(1)  # cm -> in, values untouched
+    assert abs(float(crop.get("canvas_w")) - 40.0) < 1e-9
+    assert abs(float(crop.get("canvas_h")) - 60.0) < 1e-9
+    crop_ed.unit.setCurrentIndex(0)  # back to cm
+    w._convert_unit = True
 
     # The Values mono-colour picker: saving a colour flows back to My Paints and
     # a custom hex is honoured by the control. Start from a known custom colour.

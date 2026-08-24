@@ -66,7 +66,11 @@ class CropControl(Control):
                     ("px", "px"),
                     ("ratio", "ratio"),
                 ],
-                tooltip="Display unit only — cropping uses the width:height ratio.",
+                tooltip=(
+                    "Unit for the canvas size. Changing it converts the size to "
+                    "the new unit (Settings: convert on unit change); cropping "
+                    "uses the width:height ratio."
+                ),
             ),
             Param(
                 name="lock_ratio",

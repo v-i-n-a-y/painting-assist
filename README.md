@@ -121,12 +121,15 @@ session.
 ### Canvas and Crop, match your surface
 
 Enter your canvas width and height in any unit, since only the ratio matters.
-With Lock to canvas ratio on, click Adjust crop region and an aspect-locked box
-appears over the reference. Drag it to move, drag the corners to resize while it
-holds your canvas proportions, then click Apply crop. Turn the lock off for a
-freeform crop of any shape, and use Clear crop to restore the full frame. The
-crop is stored as fractions of the image, so it is resolution-independent and
-fully non-destructive.
+Changing the unit converts the entered size to the new unit (cm, mm and inch
+convert exactly; px adopts the crop's pixel size), so the physical canvas stays
+the same — turn this off in Settings if you prefer the unit to be a
+display-only change. With Lock to canvas ratio on, click Adjust crop region and
+an aspect-locked box appears over the reference. Drag it to move, drag the
+corners to resize while it holds your canvas proportions, then click Apply
+crop. Turn the lock off for a freeform crop of any shape, and use Clear crop to
+restore the full frame. The crop is stored as fractions of the image, so it is
+resolution-independent and fully non-destructive.
 
 ## Install
 

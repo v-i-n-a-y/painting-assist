@@ -37,6 +37,39 @@ def convert_from_cm(value_cm: float, unit: str) -> float:
     return value_cm / per
 
 
+def convert_canvas_size(
+    w: float,
+    h: float,
+    from_unit: str,
+    to_unit: str,
+    crop_px: Optional[Tuple[float, float]] = None,
+) -> Tuple[float, float]:
+    """Convert canvas dimensions ``w x h`` from ``from_unit`` to ``to_unit``.
+
+    Physical units (cm/mm/in) convert exactly through centimetres, so the
+    physical canvas size is preserved. Converting *to* ``"px"`` adopts
+    ``crop_px`` (the applied crop's pixel size) when given, since a pixel
+    canvas is defined by the crop it sits on; without it the values are kept.
+    Converting *to* ``"ratio"`` keeps the numbers unchanged — they already
+    express the width:height ratio. Converting *from* ``"px"`` or ``"ratio"``
+    keeps the values unchanged, since no absolute size is recoverable from
+    them.
+    """
+    if from_unit == to_unit or w <= 0 or h <= 0:
+        return (w, h)
+    if to_unit == "px":
+        if crop_px is not None and crop_px[0] > 0 and crop_px[1] > 0:
+            return (float(crop_px[0]), float(crop_px[1]))
+        return (w, h)
+    if to_unit == "ratio":
+        return (w, h)
+    per_from = _CM_PER.get(from_unit)
+    per_to = _CM_PER.get(to_unit)
+    if per_from is None or per_to is None:
+        return (w, h)
+    return (w * per_from / per_to, h * per_from / per_to)
+
+
 def format_measure(value: float, unit: str) -> str:
     """Format a measured length with its unit, e.g. ``"12.3 cm"`` or ``"120 px"``."""
     if unit == "px":

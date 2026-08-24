@@ -9,8 +9,11 @@ and the displayed image's pixel dimensions.
 
 from __future__ import annotations
 
+import pytest
+
 from painting_assist.measure import (
     Calibration,
+    convert_canvas_size,
     convert_from_cm,
     format_measure,
 )
@@ -23,6 +26,53 @@ def test_convert_from_cm():
     assert abs(convert_from_cm(2.54, "in") - 1.0) < 1e-9
     # Unknown unit passes the centimetre value through unchanged.
     assert convert_from_cm(5.0, "px") == 5.0
+
+
+def test_convert_canvas_size_physical_round_trip():
+    w, h = convert_canvas_size(40.0, 30.0, "cm", "in")
+    assert abs(w - 40.0 / 2.54) < 1e-9
+    assert abs(h - 30.0 / 2.54) < 1e-9
+    back_w, back_h = convert_canvas_size(w, h, "in", "cm")
+    assert abs(back_w - 40.0) < 1e-9
+    assert abs(back_h - 30.0) < 1e-9
+
+
+def test_convert_canvas_size_mm_and_in():
+    w, h = convert_canvas_size(10.0, 5.0, "cm", "mm")
+    assert w == pytest.approx(100.0)
+    assert h == pytest.approx(50.0)
+    w, h = convert_canvas_size(25.4, 10.0, "mm", "in")
+    assert w == pytest.approx(1.0)
+    assert h == pytest.approx(1.0 / 2.54)  # 10 mm = 1 cm
+
+
+def test_convert_canvas_size_to_px_adopts_crop_size():
+    # A pixel canvas is defined by the crop it sits on.
+    assert convert_canvas_size(40.0, 30.0, "cm", "px", crop_px=(600.0, 450.0)) == (
+        600.0,
+        450.0,
+    )
+
+
+def test_convert_canvas_size_to_px_without_crop_keeps_values():
+    assert convert_canvas_size(40.0, 30.0, "cm", "px") == (40.0, 30.0)
+
+
+def test_convert_canvas_size_to_ratio_keeps_values():
+    # The numbers already express the width:height ratio.
+    assert convert_canvas_size(40.0, 30.0, "cm", "ratio") == (40.0, 30.0)
+
+
+def test_convert_canvas_size_from_px_or_ratio_keeps_values():
+    # No absolute size is recoverable from px or ratio values.
+    assert convert_canvas_size(600.0, 450.0, "px", "cm") == (600.0, 450.0)
+    assert convert_canvas_size(4.0, 3.0, "ratio", "cm") == (4.0, 3.0)
+
+
+def test_convert_canvas_size_same_unit_or_non_positive_noop():
+    assert convert_canvas_size(40.0, 30.0, "cm", "cm") == (40.0, 30.0)
+    assert convert_canvas_size(0.0, 30.0, "cm", "in") == (0.0, 30.0)
+    assert convert_canvas_size(40.0, -1.0, "cm", "in") == (40.0, -1.0)
 
 
 def test_format_measure():
