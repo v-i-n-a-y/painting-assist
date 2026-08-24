@@ -13,9 +13,14 @@ from painting_assist.controls.registry import register
 
 @register
 class ToneControl(Control):
-    """Tone — global contrast, saturation and colour-temperature adjustment.
+    """Tone — global exposure, contrast, saturation and colour-temperature.
 
-    Three independent knobs, each neutral at 0.0:
+    Four independent knobs, each neutral at 0.0:
+
+    * **Exposure** — a uniform shift of CIELab lightness (L): positive
+      brightens the whole reference, negative darkens it. Because L is
+      perceptually uniform, equal slider steps read as equal brightness
+      steps. Clipped at pure black/white like any other channel.
 
     * **Contrast** — steepens (or flattens) the tonal response about mid-grey via
       a monotonic 256-entry LUT applied to every RGB channel (``cv2.LUT``).
@@ -29,7 +34,7 @@ class ToneControl(Control):
       yellow, nudges a* toward red), negative cools.
 
     The contrast LUT is cheap and runs alone when it is the only active knob; the
-    (comparatively expensive) Lab round-trip is done once and only when either
+    (comparatively expensive) Lab round-trip is done once and only when exposure,
     saturation or temperature is non-zero. Deterministic; output is uint8 RGB of
     the same shape as the input and ``img`` is never mutated.
     """
@@ -38,9 +43,14 @@ class ToneControl(Control):
     name = "Tone"
     order = 5  # runs after crop=0, before blur=10
 
+    # Lab L units shifted at full-scale exposure (±1.0). 64 is ~25% of the 0..255
+    # L range: a strong but recoverable brighten/darken, matching the strength of
+    # the other full-deflection knobs.
+    EXPOSURE_L_SCALE = 64.0
+
     @classmethod
     def params(cls) -> List[Param]:
-        """Schema: three symmetric −1..1 knobs, all neutral at 0.0."""
+        """Schema: four symmetric −1..1 knobs, all neutral at 0.0."""
         common = dict(
             ptype=ParamType.FLOAT,
             default=0.0,
@@ -49,6 +59,15 @@ class ToneControl(Control):
             step=0.05,
         )
         return [
+            Param(
+                name="exposure",
+                label="Exposure",
+                tooltip=(
+                    "Brighten (right) or darken (left) the whole reference, in "
+                    "perceptual lightness."
+                ),
+                **common,
+            ),
             Param(
                 name="contrast",
                 label="Contrast",
@@ -102,13 +121,15 @@ class ToneControl(Control):
         if not self.enabled:
             return False
         return (
-            float(self.get("contrast")) != 0.0
+            float(self.get("exposure")) != 0.0
+            or float(self.get("contrast")) != 0.0
             or float(self.get("saturation")) != 0.0
             or float(self.get("temperature")) != 0.0
         )
 
     def process(self, img: np.ndarray) -> np.ndarray:
         """RGB uint8 HxWx3 -> tone-adjusted RGB uint8 HxWx3 (new array)."""
+        exposure = float(self.get("exposure"))
         contrast = float(self.get("contrast"))
         saturation = float(self.get("saturation"))
         temperature = float(self.get("temperature"))
@@ -117,11 +138,15 @@ class ToneControl(Control):
         if contrast != 0.0:
             out = cv2.LUT(np.ascontiguousarray(out), self._contrast_lut(contrast))
 
-        if saturation != 0.0 or temperature != 0.0:
+        if exposure != 0.0 or saturation != 0.0 or temperature != 0.0:
             lab = cv2.cvtColor(np.ascontiguousarray(out), cv2.COLOR_RGB2Lab)
             lab = lab.astype(np.float32)
             a = lab[:, :, 1]
             b = lab[:, :, 2]
+            if exposure != 0.0:
+                # Uniform lightness shift; a/b are untouched, so hue and chroma
+                # are preserved and only the value story moves.
+                lab[:, :, 0] += exposure * self.EXPOSURE_L_SCALE
             if saturation != 0.0:
                 scale = 1.0 + saturation  # -1 -> 0 (grey), +1 -> 2x
                 a[:] = (a - 128.0) * scale + 128.0

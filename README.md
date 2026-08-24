@@ -43,8 +43,10 @@ corrected image.
 
 ### Tone, judge temperature and contrast
 
-Global contrast, saturation and temperature knobs, all neutral at zero. Tone
-runs early in the pipeline, right after the crop, so the value and colour-group
+Global exposure, contrast, saturation and temperature knobs, all neutral at
+zero. Exposure brightens or darkens the whole reference in perceptual
+lightness, so equal slider steps read as equal brightness steps. Tone runs
+early in the pipeline, right after the crop, so the value and colour-group
 tools further down see the adjusted image. Warm and cool shifts happen in Lab
 space, which keeps them perceptually honest.
 
