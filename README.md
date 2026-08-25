@@ -65,8 +65,8 @@ majority colour (its largest Lab k-means cluster) and re-expresses it per
 technique: mid-tone dead colour, majority tint, complementary ground, light or
 dark ground, or a plain neutral grey. The tint-strength slider sets how much of
 the majority colour's chroma the ground keeps (0 = neutral grey). The
-recommendation shows as a swatch with its hex code — copy it for your gesso
-tint. It tracks the processed reference, so it updates as you crop and adjust.
+recommendation shows as a swatch with its hex code, ready to copy for your
+gesso tint. It tracks the processed reference, so it updates as you crop and adjust.
 
 ### Values, the value story
 
@@ -133,7 +133,7 @@ session.
 Enter your canvas width and height in any unit, since only the ratio matters.
 Changing the unit converts the entered size to the new unit (cm, mm and inch
 convert exactly; px adopts the crop's pixel size), so the physical canvas stays
-the same — turn this off in Settings if you prefer the unit to be a
+the same. Turn this off in Settings if you prefer the unit to be a
 display-only change. With Lock to canvas ratio on, click Adjust crop region and
 an aspect-locked box appears over the reference. Drag it to move, drag the
 corners to resize while it holds your canvas proportions, then click Apply
@@ -206,7 +206,7 @@ Settings lives under File and lets you pick the theme, either matching the
 system or forcing light or dark, and choose how often the app checks for updates,
 from every launch through to never. The update channel picks which releases the
 check follows: Stable for finished releases, or Developer to also get
-pre-releases (rc and dev builds) as soon as they are published — they are
+pre-releases (rc and dev builds) as soon as they are published. Pre-releases are
 labelled as developer builds in the update prompt. When a newer release is
 found the app offers to download the right installer for your platform and open
 it, and Check for Updates under Help runs the same check on demand.
