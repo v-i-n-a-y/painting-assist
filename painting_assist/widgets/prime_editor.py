@@ -143,14 +143,10 @@ class PrimeEditor(QWidget):
             return
         self._swatch.setStyleSheet(_swatch_style(result.rgb))
         self._hex_label.setText(result.hex)
-        self._rgb_label.setText(
-            "{}, {}, {}".format(*result.rgb)
-        )
+        self._rgb_label.setText("{}, {}, {}".format(*result.rgb))
         self._majority_swatch.setStyleSheet(_swatch_style(result.majority))
         self._majority_label.setText("Majority " + result.majority_hex)
-        self._description_label.setText(
-            DESCRIPTIONS.get(result.technique, "")
-        )
+        self._description_label.setText(DESCRIPTIONS.get(result.technique, ""))
         self._copy_btn.setEnabled(True)
 
     def _apply_no_result(self) -> None:

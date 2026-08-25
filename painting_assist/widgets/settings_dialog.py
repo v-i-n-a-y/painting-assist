@@ -165,9 +165,7 @@ class SettingsDialog(QDialog):
         form.addRow("If unreachable", self._miss_combo)
 
         # Canvas & Crop: whether changing the unit converts the entered size.
-        self._convert_unit = QCheckBox(
-            "Convert canvas size when the crop unit changes"
-        )
+        self._convert_unit = QCheckBox("Convert canvas size when the crop unit changes")
         self._convert_unit.setChecked(bool(convert_unit))
         self._convert_unit.setToolTip(
             "When the crop unit changes (cm, mm, inch, px), re-express the canvas "

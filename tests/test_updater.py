@@ -180,9 +180,7 @@ def test_pick_latest_release_skips_drafts_on_both_channels():
         _release("v0.13.0"),
     ]
     assert pick_latest_release(releases, CHANNEL_STABLE)["tag_name"] == "v0.13.0"
-    assert (
-        pick_latest_release(releases, CHANNEL_DEVELOPER)["tag_name"] == "v0.14.0-rc1"
-    )
+    assert pick_latest_release(releases, CHANNEL_DEVELOPER)["tag_name"] == "v0.14.0-rc1"
 
 
 def test_pick_latest_release_empty_or_all_draft():

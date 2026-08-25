@@ -151,17 +151,17 @@ def majority_colour(
     return tuple(int(c) for c in rgb)
 
 
-def _lab_to_rgb(l: float, a: float, b: float) -> Tuple[int, int, int]:
+def _lab_to_rgb(L: float, a: float, b: float) -> Tuple[int, int, int]:
     """Convert an 8-bit CIELab triple to an RGB triple (clipped to 0..255)."""
     rgb = cv2.cvtColor(
-        np.uint8([[[int(round(l)), int(round(a)), int(round(b))]]]),
+        np.uint8([[[int(round(L)), int(round(a)), int(round(b))]]]),
         cv2.COLOR_Lab2RGB,
     )[0, 0]
     return tuple(int(c) for c in rgb)
 
 
 def _fit_to_gamut(
-    l: float, a: float, b: float, max_iter: int = 16
+    L: float, a: float, b: float, max_iter: int = 16
 ) -> Tuple[float, float, float]:
     """Scale chroma toward neutral until the Lab colour fits in sRGB.
 
@@ -174,15 +174,15 @@ def _fit_to_gamut(
     lightness is always in gamut, so the loop always converges.
     """
     for _ in range(max_iter):
-        rgb = _lab_to_rgb(l, a, b)
-        back = cv2.cvtColor(
-            np.uint8([[[rgb[0], rgb[1], rgb[2]]]]), cv2.COLOR_RGB2Lab
-        )[0, 0]
+        rgb = _lab_to_rgb(L, a, b)
+        back = cv2.cvtColor(np.uint8([[[rgb[0], rgb[1], rgb[2]]]]), cv2.COLOR_RGB2Lab)[
+            0, 0
+        ]
         if abs(float(back[1]) - a) <= 3.0 and abs(float(back[2]) - b) <= 3.0:
-            return l, a, b
+            return L, a, b
         a = 128.0 + (a - 128.0) * 0.8
         b = 128.0 + (b - 128.0) * 0.8
-    return l, a, b
+    return L, a, b
 
 
 def prime_colour(
@@ -207,25 +207,25 @@ def prime_colour(
     lab = cv2.cvtColor(
         np.uint8([[[majority[0], majority[1], majority[2]]]]), cv2.COLOR_RGB2Lab
     )[0, 0]
-    l, a, b = (float(c) for c in lab)
+    L, a, b = (float(c) for c in lab)
 
     if technique == "complement":
         # Mirror across the neutral axis: (a-128) -> -(a-128).
         a = 256.0 - a
         b = 256.0 - b
-        l = _VALUE_TARGETS["complement"]
+        L = _VALUE_TARGETS["complement"]
     elif technique == "neutral":
-        a, b, l = 128.0, 128.0, 128.0
+        a, b, L = 128.0, 128.0, 128.0
     elif technique in _VALUE_TARGETS:
-        l = _VALUE_TARGETS[technique]
+        L = _VALUE_TARGETS[technique]
     # "majority" (and any unknown name) keeps the majority's own value.
 
     a = 128.0 + (a - 128.0) * s
     b = 128.0 + (b - 128.0) * s
-    l, a, b = _fit_to_gamut(l, a, b)
+    L, a, b = _fit_to_gamut(L, a, b)
 
     return PrimeResult(
-        rgb=_lab_to_rgb(l, a, b),
+        rgb=_lab_to_rgb(L, a, b),
         majority=majority,
         technique=technique,
     )
