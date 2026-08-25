@@ -20,7 +20,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 RESOURCES = PROJECT_ROOT / "painting_assist" / "resources"
 
-APP_VERSION = "0.13.0"  # keep in sync with pyproject.toml / __init__.py
+# Numeric marketing version for the macOS bundle (CFBundleShortVersionString /
+# CFBundleVersion must be plain x.y.z). Any prerelease suffix (e.g. -dev1) lives
+# only in the git tag and the CI-derived installer filename, not here.
+APP_VERSION = "0.14.0"  # keep in sync with pyproject.toml / __init__.py
 
 # Display name for the bundle; binary name differs on win/linux (no spaces).
 APP_DISPLAY_NAME = "Painting Assist"
