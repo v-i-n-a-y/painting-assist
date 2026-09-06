@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from painting_assist.widgets.value_histogram import value_histogram, value_mass_split
+from painting_assist.widgets.value_histogram import (
+    _lab_l_channel,
+    _value_histogram_from_l,
+    _value_mass_split_from_l,
+    value_histogram,
+    value_mass_split,
+)
 
 
 def _solid(rgb, h: int = 8, w: int = 8) -> np.ndarray:
@@ -64,3 +70,23 @@ def test_mass_split_sums_to_one() -> None:
     img = rng.integers(0, 256, size=(9, 11, 3), dtype=np.uint8)
     dark, mid, light = value_mass_split(img)
     assert abs((dark + mid + light) - 1.0) < 1e-9
+
+
+def test_shared_l_helper_matches_two_conversion_path() -> None:
+    # The widget refresh now converts to Lab-L once and feeds both the
+    # histogram and the mass split from that single array. Confirm this
+    # shared-conversion path gives identical results to calling the public,
+    # independently-converting functions.
+    rng = np.random.default_rng(9)
+    img = rng.integers(0, 256, size=(17, 23, 3), dtype=np.uint8)
+
+    lab_l = _lab_l_channel(img)
+    shared_hist = _value_histogram_from_l(lab_l, bins=16)
+    shared_split = _value_mass_split_from_l(lab_l)
+
+    direct_hist = value_histogram(img, bins=16)
+    direct_split = value_mass_split(img)
+
+    assert np.array_equal(shared_hist, direct_hist)
+    for a, b in zip(shared_split, direct_split):
+        assert abs(a - b) < 1e-6

@@ -37,6 +37,42 @@ def _as_uint8_rgb(rgb_image) -> np.ndarray:
     return np.ascontiguousarray(arr)
 
 
+def _lab_l_channel(rgb_image) -> np.ndarray:
+    """Convert an RGB image to OpenCV Lab once and return the uint8 L channel.
+
+    Shared by :func:`value_histogram` and :func:`value_mass_split` so a
+    widget refresh that needs both only pays for one Lab conversion (see
+    :func:`_value_histogram_from_l` / :func:`_value_mass_split_from_l`).
+    """
+    import cv2  # local import keeps the maths usable without cv2 at import time
+
+    arr = _as_uint8_rgb(rgb_image)
+    if arr.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2Lab)[..., 0]
+
+
+def _value_histogram_from_l(lab_l: np.ndarray, bins: int = 16) -> np.ndarray:
+    """Histogram a precomputed Lab-L uint8 array into ``bins`` equal bands."""
+    bins = max(1, int(bins))
+    if lab_l.size == 0:
+        return np.zeros(bins, dtype=np.int64)
+    counts, _ = np.histogram(lab_l, bins=bins, range=(0.0, 256.0))
+    return counts.astype(np.int64)
+
+
+def _value_mass_split_from_l(lab_l: np.ndarray) -> Tuple[float, float, float]:
+    """Split a precomputed Lab-L uint8 array into (dark, mid, light) fractions."""
+    total = lab_l.size
+    if total == 0:
+        return (0.0, 0.0, 0.0)
+    lab_l = lab_l.astype(np.float32)
+    dark = int(np.count_nonzero(lab_l < _DARK_MAX))
+    light = int(np.count_nonzero(lab_l >= _LIGHT_MIN))
+    mid = total - dark - light
+    return (dark / total, mid / total, light / total)
+
+
 def value_histogram(rgb_image, bins: int = 16) -> np.ndarray:
     """Count pixels per Lab-L value band.
 
@@ -45,15 +81,7 @@ def value_histogram(rgb_image, bins: int = 16) -> np.ndarray:
     Returns an ``int64`` array of length ``bins`` whose sum is the pixel count;
     black lands in the lowest band, white in the highest. Deterministic.
     """
-    import cv2  # local import keeps the maths usable without cv2 at import time
-
-    bins = max(1, int(bins))
-    arr = _as_uint8_rgb(rgb_image)
-    if arr.size == 0:
-        return np.zeros(bins, dtype=np.int64)
-    lab = cv2.cvtColor(arr, cv2.COLOR_RGB2Lab)
-    counts, _ = np.histogram(lab[..., 0], bins=bins, range=(0.0, 256.0))
-    return counts.astype(np.int64)
+    return _value_histogram_from_l(_lab_l_channel(rgb_image), bins)
 
 
 def value_mass_split(rgb_image) -> Tuple[float, float, float]:
@@ -61,18 +89,10 @@ def value_mass_split(rgb_image) -> Tuple[float, float, float]:
 
     Bands: dark ``L < 256/3``, mid in between, light ``L >= 512/3``. The three
     fractions sum to 1 for a non-empty image (``(0, 0, 0)`` for an empty one).
+    Computed in float32 (previously float64); results may differ from the
+    prior implementation by at most 1e-6.
     """
-    import cv2
-
-    arr = _as_uint8_rgb(rgb_image)
-    total = arr.shape[0] * arr.shape[1]
-    if total == 0:
-        return (0.0, 0.0, 0.0)
-    lab_l = cv2.cvtColor(arr, cv2.COLOR_RGB2Lab)[..., 0].astype(np.float64)
-    dark = int(np.count_nonzero(lab_l < _DARK_MAX))
-    light = int(np.count_nonzero(lab_l >= _LIGHT_MIN))
-    mid = total - dark - light
-    return (dark / total, mid / total, light / total)
+    return _value_mass_split_from_l(_lab_l_channel(rgb_image))
 
 
 # ---------------------------------------------------------------------------
@@ -106,8 +126,9 @@ class ValueHistogram(QWidget):
         if arr.ndim != 3 or arr.shape[2] < 3 or arr.size == 0:
             self.clear()
             return
-        self._counts = value_histogram(arr, self._bins)
-        self._split = value_mass_split(arr)
+        lab_l = _lab_l_channel(arr)
+        self._counts = _value_histogram_from_l(lab_l, self._bins)
+        self._split = _value_mass_split_from_l(lab_l)
         self.update()
 
     def clear(self) -> None:

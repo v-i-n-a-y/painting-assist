@@ -240,6 +240,39 @@ def test_configure_notifier_called_on_uncaught_exception(tmp_path):
     assert notified == ["RuntimeError: kaboom"]
 
 
+def test_configure_threading_excepthook_notifies_on_thread_exception(tmp_path):
+    notified = []
+    session_path = ls.configure(str(tmp_path), notifier=notified.append)
+
+    def _boom():
+        raise RuntimeError("thread kaboom")
+
+    thread = threading.Thread(target=_boom, name="worker")
+    thread.start()
+    thread.join()
+
+    for handler in ls._our_handlers:
+        handler.flush()
+
+    text = ls.read_log_text(session_path)
+    assert "Uncaught exception in thread" in text
+    assert "thread kaboom" in text
+    assert notified == ["RuntimeError: thread kaboom"]
+
+
+def test_configure_sys_excepthook_still_notifies_after_threading_setup(tmp_path):
+    notified = []
+    ls.configure(str(tmp_path), notifier=notified.append)
+
+    try:
+        raise ValueError("main thread kaboom")
+    except ValueError:
+        exc_type, exc, tb = sys.exc_info()
+        sys.excepthook(exc_type, exc, tb)
+
+    assert notified == ["ValueError: main thread kaboom"]
+
+
 def test_configure_excepthook_skips_keyboard_interrupt(tmp_path):
     session_path = ls.configure(str(tmp_path))
 

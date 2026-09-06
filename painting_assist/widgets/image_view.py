@@ -266,6 +266,12 @@ class ImageView(QGraphicsView):
         self._compare_frac = 0.5  # divider position as a fraction of the image box
         self._compare_grab_px = 12  # pixel radius for grabbing the divider handle
         self._dragging_divider = False
+        # Cache of the "before" pixmap pre-scaled to the on-screen image box, so
+        # a mouse-drag on the divider does not re-run a smooth scale of a full
+        # resolution pixmap on every paint. Keyed on the source pixmap identity,
+        # the target size in device pixels and the device pixel ratio; a single
+        # entry is kept and rebuilt whenever any part of the key changes.
+        self._compare_scaled_cache: Optional[Dict[str, Any]] = None
 
         # Centred placeholder shown over the blank viewport before any image is
         # loaded; the window may override the copy via set_placeholder.
@@ -349,6 +355,7 @@ class ImageView(QGraphicsView):
         ``None`` clears it, leaving compare mode with nothing extra to draw.
         """
         self._compare_pixmap = None if rgb is None else ndarray_to_qpixmap(rgb)
+        self._compare_scaled_cache = None
         self.viewport().update()
 
     def set_compare_mode(self, on: bool) -> None:
@@ -676,6 +683,32 @@ class ImageView(QGraphicsView):
     # ------------------------------------------------------------------ #
     # Grid + measure labels (drawn in the foreground, never clipped/trailed)
     # ------------------------------------------------------------------ #
+    def _compare_scaled_pixmap(self, target_size) -> QPixmap:
+        """Return the "before" pixmap smooth-scaled to ``target_size`` (logical px).
+
+        Cached on (source pixmap identity, target size in device pixels rounded
+        to int, device pixel ratio) so a divider drag, which repaints on every
+        mouse move but rarely changes the target size, does not re-run a smooth
+        scale of a full-resolution pixmap each frame. Only one entry is kept.
+        """
+        dpr = self.devicePixelRatioF()
+        device_w = round(target_size.width() * dpr)
+        device_h = round(target_size.height() * dpr)
+        key = (self._compare_pixmap.cacheKey(), device_w, device_h, dpr)
+        cache = self._compare_scaled_cache
+        if cache is not None and cache["key"] == key:
+            return cache["pixmap"]
+
+        scaled = self._compare_pixmap.scaled(
+            max(device_w, 1),
+            max(device_h, 1),
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        scaled.setDevicePixelRatio(dpr)
+        self._compare_scaled_cache = {"key": key, "pixmap": scaled}
+        return scaled
+
     def _draw_compare_overlay(self, painter: QPainter) -> None:
         """Paint the before/after wipe: the "before" pixmap over the left side.
 
@@ -707,9 +740,8 @@ class ImageView(QGraphicsView):
             vp_rect.height(),
         )
         painter.setClipRect(left_clip)
-        painter.drawPixmap(
-            QRectF(vp_rect), self._compare_pixmap, QRectF(self._compare_pixmap.rect())
-        )
+        scaled = self._compare_scaled_pixmap(vp_rect.size())
+        painter.drawPixmap(QRectF(vp_rect), scaled, QRectF(scaled.rect()))
         painter.setClipping(False)
 
         # Subtle "Before"/"After" labels near the top corners of each side.

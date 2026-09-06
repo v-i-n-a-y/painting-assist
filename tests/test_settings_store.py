@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 from painting_assist.settings_store import (
@@ -90,6 +91,116 @@ def test_partial_file_deep_merges(tmp_path):
     assert store.data["session"] == DEFAULTS["session"]
     assert "recent_images" in store.data
     assert store.data["schema_version"] == SCHEMA_VERSION
+
+
+def test_wrong_type_scalar_falls_back_to_default(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"recent_images": 3}), encoding="utf-8")
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data["recent_images"] == DEFAULTS["recent_images"]
+
+
+def test_wrong_type_list_falls_back_to_default(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"paints": "oops"}), encoding="utf-8")
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data["paints"] == DEFAULTS["paints"]
+
+
+def test_wrong_type_dict_falls_back_to_default(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"session": "oops"}), encoding="utf-8")
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data["session"] == DEFAULTS["session"]
+
+
+def test_wrong_type_nested_key_falls_back_to_default(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"preferences": {"theme": 5, "measure_edges": "yes"}}),
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data["preferences"]["theme"] == DEFAULTS["preferences"]["theme"]
+    assert (
+        store.data["preferences"]["measure_edges"]
+        == DEFAULTS["preferences"]["measure_edges"]
+    )
+
+
+def test_bool_default_rejects_int_and_int_rejects_bool(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"preferences": {"measure_edges": 1, "tolerance_pct": True}}),
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert (
+        store.data["preferences"]["measure_edges"]
+        == DEFAULTS["preferences"]["measure_edges"]
+    )
+    assert (
+        store.data["preferences"]["tolerance_pct"]
+        == DEFAULTS["preferences"]["tolerance_pct"]
+    )
+
+
+def test_int_accepted_for_float_default(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"preferences": {"update_hours": 12}}), encoding="utf-8")
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data["preferences"]["update_hours"] == 12
+
+
+def test_unknown_keys_survive_load(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "future_section": {"whatever": True},
+                "preferences": {"theme": "dark", "future_pref": "x"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data["future_section"] == {"whatever": True}
+    assert store.data["preferences"]["future_pref"] == "x"
+    assert store.data["preferences"]["theme"] == "dark"
+
+
+def test_valid_file_loads_unchanged(tmp_path):
+    path = tmp_path / "settings.json"
+    valid = copy.deepcopy(DEFAULTS)
+    valid["preferences"]["theme"] = "dark"
+    valid["paints"] = [{"name": "Cobalt Blue", "rgb": [30, 70, 150]}]
+    path.write_text(json.dumps(valid), encoding="utf-8")
+
+    store = SettingsStore(str(path))
+    store.load()
+
+    assert store.data == valid
 
 
 def test_migrate_current_version_is_noop():

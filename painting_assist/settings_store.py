@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import tempfile
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -96,19 +99,48 @@ def migrate(data: dict) -> dict:
     return data
 
 
+def _same_broad_type(default_value, value) -> bool:
+    """Return whether ``value`` is an acceptable stand-in for ``default_value``.
+
+    A default of ``None`` accepts anything (there is no schema to enforce). A
+    ``bool`` default only accepts a ``bool`` (booleans are also ``int`` in
+    Python, so this must be checked before the numeric case). An ``int`` or
+    ``float`` default accepts either, but not a ``bool``. Everything else
+    (``dict``, ``list``, ``str``) requires an exact type match.
+    """
+    if default_value is None:
+        return True
+    if isinstance(default_value, bool):
+        return isinstance(value, bool)
+    if isinstance(default_value, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, type(default_value))
+
+
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Recursively merge ``overlay`` onto a copy-friendly ``base`` dict.
 
     ``base`` is mutated in place. For keys present in both where both values are
-    dicts, the merge recurses; otherwise the ``overlay`` value wins (lists and
-    scalars are taken wholesale from ``overlay``). Keys present only in ``base``
-    are left untouched, which is what fills in any section or key a loaded file
-    omits. Returns ``base``.
+    dicts, the merge recurses. For keys present in ``base`` (i.e. keys that are
+    part of :data:`DEFAULTS`) where ``overlay`` supplies a value of a different
+    broad type than the default (see :func:`_same_broad_type`), the default is
+    kept and a warning is logged once, so a corrupted or hand-edited file cannot
+    smuggle a wrong-shaped value into the loaded document. Keys present only in
+    ``overlay`` (not part of :data:`DEFAULTS`) are kept as-is, for forward
+    compatibility with newer builds' settings files. Returns ``base``.
     """
     for key, value in overlay.items():
+        has_default = key in base
         existing = base.get(key)
         if isinstance(existing, dict) and isinstance(value, dict):
             _deep_merge(existing, value)
+        elif has_default and not _same_broad_type(existing, value):
+            logger.warning(
+                "Ignoring settings key %r: expected %s, got %s; keeping default",
+                key,
+                type(existing).__name__,
+                type(value).__name__,
+            )
         else:
             base[key] = value
     return base

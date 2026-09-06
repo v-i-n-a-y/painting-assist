@@ -147,9 +147,11 @@ def configure(
     hook._painting_assist_hook = True  # type: ignore[attr-defined]
     sys.excepthook = hook
 
-    if threading.excepthook is not _threading_excepthook:
+    if not getattr(threading.excepthook, "_painting_assist_hook", False):
         _prior_threading_excepthook = threading.excepthook
-    threading.excepthook = _threading_excepthook
+    threading_hook = _make_threading_excepthook(notifier)
+    threading_hook._painting_assist_hook = True  # type: ignore[attr-defined]
+    threading.excepthook = threading_hook
 
     _active_log_dir = log_dir
     _active_session_path = session_path
@@ -198,34 +200,44 @@ def _make_excepthook(
     return _hook
 
 
-def _threading_excepthook(args: threading.ExceptHookArgs) -> None:
-    """``threading.excepthook`` replacement installed by :func:`configure`.
+def _make_threading_excepthook(
+    notifier: Callable[[str], None] | None,
+) -> Callable[[threading.ExceptHookArgs], None]:
+    """Build the ``threading.excepthook`` replacement installed by :func:`configure`.
 
     Logs the background-thread exception at CRITICAL (skipping if
     ``exc_value`` is ``None``, which threading itself never passes but which
-    a caller could conceivably synthesize), then chains to whichever
-    ``threading.excepthook`` was active before :func:`configure` ran. Guarded
-    against recursive invocation.
+    a caller could conceivably synthesize), optionally notifies via
+    ``notifier`` (the same callback passed to the ``sys.excepthook``
+    replacement, so a worker-thread crash surfaces the same way a main-thread
+    one does), then chains to whichever ``threading.excepthook`` was active
+    before :func:`configure` ran. Guarded against recursive invocation.
     """
-    global _in_threading_excepthook
 
-    prior = _prior_threading_excepthook or threading.__excepthook__
+    def _hook(args: threading.ExceptHookArgs) -> None:
+        global _in_threading_excepthook
 
-    if args.exc_value is None or _in_threading_excepthook:
+        prior = _prior_threading_excepthook or threading.__excepthook__
+
+        if args.exc_value is None or _in_threading_excepthook:
+            prior(args)
+            return
+
+        _in_threading_excepthook = True
+        try:
+            logging.getLogger("painting_assist").critical(
+                "Uncaught exception in thread %r",
+                args.thread.name if args.thread is not None else "?",
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+            if notifier is not None:
+                notifier(f"{args.exc_type.__name__}: {args.exc_value}")
+        finally:
+            _in_threading_excepthook = False
+
         prior(args)
-        return
 
-    _in_threading_excepthook = True
-    try:
-        logging.getLogger("painting_assist").critical(
-            "Uncaught exception in thread %r",
-            args.thread.name if args.thread is not None else "?",
-            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-        )
-    finally:
-        _in_threading_excepthook = False
-
-    prior(args)
+    return _hook
 
 
 def active_log_dir() -> str | None:

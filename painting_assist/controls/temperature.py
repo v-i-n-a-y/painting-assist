@@ -12,8 +12,11 @@ tint is modulated by the pixel's lightness so forms stay legible, and a Strength
 knob cross-fades the whole thing back to a plain greyscale value study.
 
 All work is in CIELab (OpenCV's uint8 encoding: L in 0-255, a/b offset by 128).
-Deterministic; the output is uint8 RGB of the same shape as the input and
-``img`` is never mutated.
+To stay memory-bounded on large images, the Lab/warmth maths runs on a
+downscaled proxy of at most ``PROC_MAX_PX`` pixels (mirroring the pattern in
+``quantize.py``), and the false-colour result is then upscaled back to the
+source size with bilinear interpolation. Deterministic; the output is uint8
+RGB of the same shape as the input and ``img`` is never mutated.
 """
 
 from __future__ import annotations
@@ -40,6 +43,12 @@ class TemperatureMapControl(Control):
     id = "temp_map"
     name = "Temperature map"
     order = 25  # runs after values=20, a late diagnostic view
+
+    # Warmth maths runs on a proxy no larger than this many pixels, then the
+    # false-colour result is upscaled (bilinear) to full size. Bounds peak
+    # memory independently of the source resolution. Same name/value as
+    # quantize.ColourGroupsControl.PROC_MAX_PX.
+    PROC_MAX_PX = 250_000
 
     NEUTRAL = 128.0  # Lab a/b of a chromatically neutral pixel (OpenCV uint8)
     # Warmth this many Lab units from neutral saturates the tint fully. Chosen so
@@ -79,10 +88,15 @@ class TemperatureMapControl(Control):
     def process(self, img: np.ndarray) -> np.ndarray:
         """RGB uint8 HxWx3 -> warm/cool false-colour RGB uint8 HxWx3 (new array).
 
-        Does not mutate ``img``. Converts to CIELab, derives a signed warmth from
-        b* (plus a small a* term), tints each pixel toward orange or blue in
-        proportion to ``|warmth|``, modulates by lightness for legibility, and
-        cross-fades back toward greyscale by the Strength knob.
+        Does not mutate ``img``. To bound peak memory on large images, the Lab
+        conversion and warmth maths run on a proxy downscaled to at most
+        ``PROC_MAX_PX`` pixels (images already at or below that size are used
+        as-is, so their output is byte-identical to processing at native
+        resolution): derives a signed warmth from b* (plus a small a* term),
+        tints each pixel toward orange or blue in proportion to ``|warmth|``,
+        modulates by lightness for legibility, and cross-fades back toward
+        greyscale by the Strength knob. The false-colour proxy is then
+        upscaled back to the source size with bilinear interpolation.
         """
         h, w = img.shape[:2]
         if h == 0 or w == 0:
@@ -90,8 +104,18 @@ class TemperatureMapControl(Control):
 
         strength = max(0, min(100, int(self.get("strength")))) / 100.0
 
-        lab = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2Lab)
-        lab = lab.astype(np.float32)
+        px = h * w
+        if px > self.PROC_MAX_PX:
+            scale = (self.PROC_MAX_PX / px) ** 0.5
+            pw, ph = max(1, int(w * scale)), max(1, int(h * scale))
+            small = cv2.resize(
+                np.ascontiguousarray(img), (pw, ph), interpolation=cv2.INTER_AREA
+            )
+        else:
+            small = np.ascontiguousarray(img)
+        sh, sw = small.shape[:2]
+
+        lab = cv2.cvtColor(small, cv2.COLOR_RGB2Lab).astype(np.float32)
         lightness = lab[:, :, 0] / 255.0  # 0..1 brightness for legibility
         warmth = (lab[:, :, 2] - self.NEUTRAL) + 0.3 * (lab[:, :, 1] - self.NEUTRAL)
         signed = np.clip(warmth / self.WARMTH_SCALE, -1.0, 1.0)
@@ -99,13 +123,17 @@ class TemperatureMapControl(Control):
 
         warm = np.array(self.WARM_RGB, dtype=np.float32)
         cool = np.array(self.COOL_RGB, dtype=np.float32)
-        tone = np.where((signed >= 0.0)[:, :, None], warm, cool)  # (h, w, 3)
+        tone = np.where((signed >= 0.0)[:, :, None], warm, cool)  # (sh, sw, 3)
 
-        grey = np.repeat(lightness[:, :, None], 3, axis=2)
         tinted = lightness[:, :, None] * tone  # lightness-modulated tone
 
         blend = (strength * magnitude)[:, :, None]  # 0..1 per pixel
-        out = grey * (1.0 - blend) + tinted * blend
+        # grey is lightness broadcast to 3 channels; folded into this
+        # expression directly so no separate (sh, sw, 3) grey array is
+        # allocated.
+        out = lightness[:, :, None] * (1.0 - blend) + tinted * blend
 
         out = np.clip(np.round(out * 255.0), 0, 255).astype(np.uint8)
+        if (sh, sw) != (h, w):
+            out = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
         return np.ascontiguousarray(out)

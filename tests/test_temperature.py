@@ -85,3 +85,42 @@ def test_does_not_mutate_input():
     original = img.copy()
     _run(img)
     assert np.array_equal(img, original)
+
+
+def test_large_image_uses_proxy_and_correlates_with_small():
+    # Above PROC_MAX_PX so process() must take the downscale-then-upscale
+    # path. Build the large image by tiling a small patchwork so the proxy
+    # (an area-averaged downscale) stays close to a plain resize of the
+    # small original, letting us compare the two outputs directly.
+    rng = np.random.default_rng(11)
+    small = rng.integers(0, 256, size=(64, 64, 3), dtype=np.uint8)
+    scale = 16  # 64*16 = 1024 -> 1024*1024 ~= 1.05M px, well above PROC_MAX_PX
+    large = np.kron(small, np.ones((scale, scale, 1), dtype=np.uint8))
+    assert large.shape[0] * large.shape[1] > TemperatureMapControl.PROC_MAX_PX
+
+    out_large = _run(large)
+    assert out_large.shape == large.shape
+    assert out_large.dtype == np.uint8
+
+    out_small = _run(small)
+
+    # Downscale the large result back to the small image's size and compare;
+    # a few Lab-uint8-roundtrip and resampling levels of slack are allowed.
+    import cv2
+
+    resized = cv2.resize(
+        out_large, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_AREA
+    )
+    diff = np.abs(resized.astype(np.int16) - out_small.astype(np.int16))
+    assert diff.mean() < 6.0
+
+
+def test_small_image_bypasses_proxy_unchanged():
+    # At/below PROC_MAX_PX, no downscale should occur, so results must be
+    # exactly reproducible run to run (same code path as before the proxy
+    # was introduced).
+    img = _colour_img(size=32)
+    assert img.shape[0] * img.shape[1] <= TemperatureMapControl.PROC_MAX_PX
+    out1 = _run(img)
+    out2 = _run(img)
+    assert np.array_equal(out1, out2)

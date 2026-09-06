@@ -13,14 +13,18 @@ import logging
 import os
 import platform
 import sys
+import time
 
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from PySide6.QtCore import (
+    QObject,
     QSettings,
+    Qt,
     QTimer,
     QUrl,
+    Signal,
     qInstallMessageHandler,
     QtMsgType,
 )
@@ -55,39 +59,118 @@ def _qt_message_handler(mode, context, message: str) -> None:
     logging.getLogger("qt").log(_QT_LEVELS.get(mode, logging.INFO), "%s", message)
 
 
-def _error_notifier(msg: str) -> None:
-    """Show a non-fatal error dialog after an uncaught exception was logged.
+# How long a repeated identical error message is suppressed for, in seconds.
+# The exception is still logged every time; only the modal dialog is skipped.
+_ERROR_DIALOG_DEDUPE_WINDOW = 30.0
 
-    Called from the logging excepthook, so it defers the dialog onto the Qt
-    event loop (``QTimer.singleShot``) rather than constructing it inline, which
-    keeps it clear of the failing call stack.
+
+class _ErrorNotifierBridge(QObject):
+    """Lives on the GUI thread; carries error notifications across threads.
+
+    ``logging_setup``'s excepthooks may fire on any thread (a background
+    worker's uncaught exception goes through ``threading.excepthook``, not
+    the main thread). Constructing or showing a ``QMessageBox`` from a
+    non-GUI thread is unsafe, and ``QTimer.singleShot`` queues onto the
+    *calling* thread, which has no event loop to deliver it. Emitting a Qt
+    signal is thread-safe regardless of which thread emits it, and a queued
+    connection guarantees the slot runs on the thread that owns this object
+    (the GUI thread), so routing every notification through here is what
+    actually gets the dialog to appear.
     """
 
-    def show() -> None:
-        box = QMessageBox(
-            QMessageBox.Critical,
-            "Unexpected error",
-            "An unexpected error occurred:\n\n"
-            f"{msg}\n\n"
-            "Details have been written to the log (Help ▸ View Logs…). You can "
-            "open a pre-filled GitHub report below — nothing is sent until you "
-            "review and submit it.",
-        )
-        report_btn = box.addButton("Report on GitHub", QMessageBox.ActionRole)
-        box.addButton("Close", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is report_btn:
-            session = logging_setup.active_session_path()
-            log_text = logging_setup.read_log_text(session) if session else ""
-            url = bug_report.issue_url(
-                __version__,
-                log_text,
-                title=f"Crash: {msg}",
-                intro="Painting Assist reported an uncaught exception.",
-            )
-            QDesktopServices.openUrl(QUrl(url))
+    errorOccurred = Signal(str)
 
-    QTimer.singleShot(0, show)
+
+# Set once in `main()`, after `QApplication` exists. `None` until then (or in
+# a headless/test context that never called `main`), in which case
+# `_error_notifier` falls back to `QTimer.singleShot`.
+_error_notifier_bridge: _ErrorNotifierBridge | None = None
+
+# Rate-limiting state for the GUI-thread dialog slot. A dialog already on
+# screen blocks any other from opening, and an identical message is
+# suppressed for `_ERROR_DIALOG_DEDUPE_WINDOW` seconds after the last one was
+# shown, so a repeating exception (e.g. inside a paint or timer slot) cannot
+# open a dialog per occurrence.
+_error_dialog_open = False
+_last_error_message: str | None = None
+_last_error_time: float = 0.0
+
+
+def _error_notifier(msg: str) -> None:
+    """Notify the GUI of an uncaught exception logged by ``logging_setup``.
+
+    May be called from any thread (the main thread's ``sys.excepthook`` or a
+    worker's ``threading.excepthook``). Prefers emitting
+    ``_error_notifier_bridge.errorOccurred``, which is thread-safe and
+    queues onto the GUI thread; falls back to ``QTimer.singleShot`` if the
+    bridge has not been created yet or the application has already gone
+    (best-effort only in that case, matching the previous behaviour).
+    """
+    bridge = _error_notifier_bridge
+    if bridge is not None and QApplication.instance() is not None:
+        bridge.errorOccurred.emit(msg)
+        return
+    QTimer.singleShot(0, lambda: _show_error_dialog(msg))
+
+
+def _show_error_dialog(msg: str) -> None:
+    """GUI-thread slot that applies rate limiting, then shows the dialog.
+
+    Skips opening a new dialog while one is already open, and skips an
+    identical message seen within the last `_ERROR_DIALOG_DEDUPE_WINDOW`
+    seconds. Neither skip affects logging, which has already happened by
+    the time this runs.
+    """
+    global _error_dialog_open, _last_error_message, _last_error_time
+
+    if _error_dialog_open:
+        return
+
+    now = time.monotonic()
+    if (
+        msg == _last_error_message
+        and now - _last_error_time < _ERROR_DIALOG_DEDUPE_WINDOW
+    ):
+        return
+
+    _last_error_message = msg
+    _last_error_time = now
+    _error_dialog_open = True
+    try:
+        _run_error_dialog(msg)
+    finally:
+        _error_dialog_open = False
+
+
+def _run_error_dialog(msg: str) -> None:
+    """Build, show, and handle the result of the error dialog for ``msg``.
+
+    Split out from `_show_error_dialog` so tests can monkeypatch this
+    function to record calls instead of actually running a modal
+    ``QMessageBox.exec()``.
+    """
+    box = QMessageBox(
+        QMessageBox.Critical,
+        "Unexpected error",
+        "An unexpected error occurred:\n\n"
+        f"{msg}\n\n"
+        "Details have been written to the log (Help ▸ View Logs…). You can "
+        "open a pre-filled GitHub report below — nothing is sent until you "
+        "review and submit it.",
+    )
+    report_btn = box.addButton("Report on GitHub", QMessageBox.ActionRole)
+    box.addButton("Close", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is report_btn:
+        session = logging_setup.active_session_path()
+        log_text = logging_setup.read_log_text(session) if session else ""
+        url = bug_report.issue_url(
+            __version__,
+            log_text,
+            title=f"Crash: {msg}",
+            intro="Painting Assist reported an uncaught exception.",
+        )
+        QDesktopServices.openUrl(QUrl(url))
 
 
 def _app_icon() -> QIcon:
@@ -107,6 +190,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Painting Assist")
     app.setApplicationDisplayName("Painting Assist")
+
+    global _error_notifier_bridge
+    _error_notifier_bridge = _ErrorNotifierBridge()
+    _error_notifier_bridge.errorOccurred.connect(
+        _show_error_dialog, Qt.QueuedConnection
+    )
 
     # Read the persisted theme + log-location override once. On the very first
     # launch after upgrading (no store file yet) fall back to the legacy
