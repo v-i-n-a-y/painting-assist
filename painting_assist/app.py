@@ -161,7 +161,32 @@ def main() -> int:
     win.resize(1280, 800)
     win.show()
     _log.info("Main window shown; entering event loop")
-    return app.exec()
+    rc = app.exec()
+    _shutdown(app, win, rc)
+    return rc
+
+
+def _shutdown(app: QApplication, win: MainWindow, rc: int) -> None:
+    """Tear the GUI down in a controlled order, then terminate the process.
+
+    Qt 6.8's Cocoa plugin can segfault while destroying ``QApplication`` at
+    interpreter exit: it releases a retained ``NSEvent`` whose ``NSTouch``
+    set (from a trackpad gesture earlier in the session) is already gone. That
+    destructor normally runs from PySide's ``atexit`` hook, after the session
+    has been saved, so the crash costs no data but shows a macOS crash report.
+
+    Everything the user cares about has already happened by now (``closeEvent``
+    saved the session and drained the render workers), so we delete the window
+    while Python is fully alive, flush the logs, and ``os._exit`` to skip the
+    ``QApplication`` destructor and the rest of interpreter finalisation.
+    """
+    win.deleteLater()
+    app.processEvents()
+    _log.info("Exiting with status %d", rc)
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)
 
 
 if __name__ == "__main__":

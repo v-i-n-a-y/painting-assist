@@ -152,7 +152,10 @@ class ControlPipeline:
             )
             if metadata_out is not None and stage_meta:
                 metadata_out.update(stage_meta)
-            self._invalidate_from(i + 1)
+            # Downstream slots are left alone: their chain_key embeds every
+            # upstream stage key, so they miss by themselves if this stage's
+            # state changed, and hit again if this was merely a slot that
+            # _trim_cache had evicted and we have just recomputed identically.
             current = output
 
         self._trim_cache()

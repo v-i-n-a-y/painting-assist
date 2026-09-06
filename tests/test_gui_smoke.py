@@ -9,6 +9,7 @@ never blocks. Skips cleanly (prints SKIP) if no Qt platform can be initialised.
 
 import os
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -17,10 +18,31 @@ import numpy as np
 def main() -> int:
     try:
         from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QTimer, QStandardPaths, QSettings
     except Exception as exc:  # pragma: no cover
         print("SKIP (PySide6 import failed): %s" % exc)
         return 0
+
+    # Sandbox QStandardPaths/QSettings so this run never reads or clobbers a
+    # real user's persisted app data (window layout, last-used crop unit,
+    # etc.). Without this, results depend on whatever this machine's actual
+    # Painting Assist usage last saved. setTestModeEnabled redirects
+    # QStandardPaths (the JSON settings-store location). QSettings is opened
+    # by MainWindow with hard-coded org/app names via the two-arg
+    # constructor, which resolves to the platform's NativeFormat regardless
+    # of setDefaultFormat/setPath, so main_window.QSettings is monkeypatched
+    # to a subclass that always points at a throwaway ini file instead.
+    QStandardPaths.setTestModeEnabled(True)
+    _settings_sandbox = tempfile.mkdtemp(prefix="painting_assist_smoke_")
+    _sandbox_ini = os.path.join(_settings_sandbox, "settings.ini")
+
+    class _SandboxQSettings(QSettings):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(_sandbox_ini, QSettings.Format.IniFormat)
+
+    import painting_assist.main_window as main_window_mod
+
+    main_window_mod.QSettings = _SandboxQSettings
 
     app = QApplication(sys.argv or ["squint-test"])
 
@@ -83,7 +105,12 @@ def main() -> int:
 
     # Unit conversion: switching the crop unit re-expresses the canvas size in
     # the new unit (settings-gated), preserving the physical size. The canvas
-    # is 40 x 60 cm here (the freeform sync above set the height).
+    # is 40 x 60 cm here (the freeform sync above set the height). Force the
+    # starting unit to cm explicitly: MainWindow restores the last-used crop
+    # unit from the persisted session store, so a machine with prior real app
+    # usage may not start on the control's "cm" default.
+    crop.set("unit", "cm")
+    crop_ed.refresh()
     crop_ed.unit.setCurrentIndex(1)  # cm -> in
     assert abs(float(crop.get("canvas_w")) - 40.0 / 2.54) < 1e-9
     assert abs(float(crop.get("canvas_h")) - 60.0 / 2.54) < 1e-9
@@ -153,8 +180,6 @@ def main() -> int:
     # Project round-trip: saving the current session to a .paproj writes a doc
     # whose controls and measure settings faithfully round-trip through the
     # project module, and applying that doc restores a since-mutated control.
-    import tempfile
-
     from painting_assist import project as project_mod
 
     tmp_dir = tempfile.mkdtemp(prefix="pa_smoke_")

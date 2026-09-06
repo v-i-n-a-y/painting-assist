@@ -119,6 +119,7 @@ def configure(
     # other code are left alone.
     for handler in _our_handlers:
         root.removeHandler(handler)
+        handler.close()  # release the previous session file
     _our_handlers.clear()
 
     formatter = logging.Formatter(LOG_FORMAT)
@@ -137,10 +138,17 @@ def configure(
 
     logging.captureWarnings(True)
 
-    _prior_excepthook = sys.excepthook
-    sys.excepthook = _make_excepthook(notifier)
+    # On a repeat configure() the active hooks are already ours; keep chaining
+    # to the original ones rather than to ourselves (which would log and
+    # notify each uncaught exception once per configure() call).
+    if not getattr(sys.excepthook, "_painting_assist_hook", False):
+        _prior_excepthook = sys.excepthook
+    hook = _make_excepthook(notifier)
+    hook._painting_assist_hook = True  # type: ignore[attr-defined]
+    sys.excepthook = hook
 
-    _prior_threading_excepthook = threading.excepthook
+    if threading.excepthook is not _threading_excepthook:
+        _prior_threading_excepthook = threading.excepthook
     threading.excepthook = _threading_excepthook
 
     _active_log_dir = log_dir

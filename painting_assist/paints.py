@@ -183,7 +183,7 @@ def _coerce_rgb(value: object) -> tuple[int, int, int] | None:
     for component in value:
         try:
             number = int(round(float(component)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         out.append(max(0, min(255, number)))
     return (out[0], out[1], out[2])

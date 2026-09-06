@@ -129,6 +129,9 @@ class ToneControl(Control):
 
     def process(self, img: np.ndarray) -> np.ndarray:
         """RGB uint8 HxWx3 -> tone-adjusted RGB uint8 HxWx3 (new array)."""
+        h, w = img.shape[:2]
+        if h == 0 or w == 0:
+            return img.copy()
         exposure = float(self.get("exposure"))
         contrast = float(self.get("contrast"))
         saturation = float(self.get("saturation"))

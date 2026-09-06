@@ -19,6 +19,8 @@ import time
 from typing import Optional, Tuple
 
 import cv2
+import logging
+
 import numpy as np
 from PySide6.QtCore import (
     Qt,
@@ -105,6 +107,8 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 # QSettings scope for persisted window geometry/state (Qt binary blobs). All
 # other, portable settings now live in a versioned JSON store under the app-data
 # folder resolved by ``_app_data_dir``.
+_log = logging.getLogger(__name__)
+
 _SETTINGS_ORG = "Vinay"
 _SETTINGS_APP = "Painting Assist"
 
@@ -1556,7 +1560,8 @@ class MainWindow(QMainWindow):
         try:
             self._store.save()
         except OSError:
-            pass
+            _log.warning("Could not save settings", exc_info=True)
+            self.statusBar().showMessage("Couldn't save settings (see log).", 6000)
 
     def _paints_from_store(self):
         """Read the paint inventory from the store as ``[(name, (r, g, b))]``.
@@ -1904,6 +1909,8 @@ class MainWindow(QMainWindow):
         radius = max(0, self._palette_panel.sample_size() // 2)
         y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
         x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
+        if image.ndim == 2:
+            image = np.repeat(image[:, :, None], 3, axis=2)
         region = image[y0:y1, x0:x1].reshape(-1, image.shape[2])
         rgb = tuple(int(round(v)) for v in region.mean(axis=0))
         if self._sampling_for_palette:
@@ -2919,6 +2926,7 @@ class MainWindow(QMainWindow):
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/state", self.saveState())
         settings.setValue("window/layout_version", _LAYOUT_VERSION)
+        settings.sync()  # written now, not left to a destructor at exit
 
         states = {
             control.id: control.to_state() for control in self._pipeline.controls()
@@ -2939,5 +2947,7 @@ class MainWindow(QMainWindow):
         has already torn down, which segfaults on exit.
         """
         self._save_session()
+        self._updater.shutdown()
+        self._model.shutdown()
         self._renderer.shutdown()
         super().closeEvent(event)

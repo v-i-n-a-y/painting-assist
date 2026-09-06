@@ -71,9 +71,21 @@ class _LoadTask(QRunnable):
         try:
             rgb = _decode_rgb(self._path)
         except Exception as exc:
-            self._signals.failed.emit(self._serial, self._path, str(exc))
+            _emit(self._signals.failed, self._serial, self._path, str(exc))
             return
-        self._signals.loaded.emit(self._serial, self._path, rgb)
+        _emit(self._signals.loaded, self._serial, self._path, rgb)
+
+
+def _emit(signal, *args) -> None:
+    """Emit from the worker, tolerating a holder Qt has already deleted.
+
+    A decode that outlives the window (close during a slow load) must not
+    raise on the pool thread; the result is simply dropped.
+    """
+    try:
+        signal.emit(*args)
+    except RuntimeError:
+        pass
 
 
 class ImageModel(QObject):
@@ -134,6 +146,21 @@ class ImageModel(QObject):
         """
         self._load_serial += 1
         self._pool.start(_LoadTask(path, self._load_serial, self._load_signals))
+
+    def shutdown(self) -> None:
+        """Detach the async loader so a late decode cannot reach a dead model.
+
+        Bumps the serial too, so any result that does arrive is ignored.
+        """
+        self._load_serial += 1
+        for signal, slot in (
+            (self._load_signals.loaded, self._on_async_loaded),
+            (self._load_signals.failed, self._on_async_failed),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
 
     def _on_async_loaded(self, serial: int, path: str, rgb: object) -> None:
         """GUI thread: apply a decoded image unless a newer load superseded it."""

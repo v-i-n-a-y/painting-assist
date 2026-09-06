@@ -405,7 +405,10 @@ class ImageView(QGraphicsView):
         """
         if self._item.pixmap().isNull():
             return
-        image_rect = self._item.boundingRect()
+        # Scene coordinates, not pixmap pixels: the pixmap item is scaled by
+        # 1/display_scale for interactive previews, and the overlay lives in
+        # the scene alongside it.
+        image_rect = self._item.sceneBoundingRect()
         if self._crop_item is None:
             self._crop_item = CropItem(image_rect)
             self._crop_item.rectChanged.connect(self._on_crop_rect)
@@ -414,10 +417,14 @@ class ImageView(QGraphicsView):
             self._crop_item.set_image_rect(image_rect)
             self._crop_item.show()
 
-        w = max(1.0, float(self._item.pixmap().width()))
-        h = max(1.0, float(self._item.pixmap().height()))
+        w = max(1.0, float(image_rect.width()))
+        h = max(1.0, float(image_rect.height()))
         rx, ry, rw, rh = rect_norm
-        self._crop_item.set_rect(QRectF(rx * w, ry * h, rw * w, rh * h))
+        self._crop_item.set_rect(
+            QRectF(
+                image_rect.left() + rx * w, image_rect.top() + ry * h, rw * w, rh * h
+            )
+        )
         self._crop_item.set_aspect(aspect)
 
         self._crop_editing = True
@@ -436,9 +443,11 @@ class ImageView(QGraphicsView):
             self._crop_item.set_aspect(aspect)
 
     def _on_crop_rect(self, rect: QRectF) -> None:
-        """Convert an overlay rect (image px) to normalised fractions and emit."""
-        w = max(1.0, float(self._item.pixmap().width()))
-        h = max(1.0, float(self._item.pixmap().height()))
+        """Convert an overlay rect (scene units) to normalised fractions and emit."""
+        image_rect = self._item.sceneBoundingRect()
+        w = max(1.0, float(image_rect.width()))
+        h = max(1.0, float(image_rect.height()))
+        rect = rect.translated(-image_rect.left(), -image_rect.top())
         self.cropRectChanged.emit(
             rect.x() / w, rect.y() / h, rect.width() / w, rect.height() / h
         )

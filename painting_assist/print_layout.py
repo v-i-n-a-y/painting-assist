@@ -49,7 +49,10 @@ def _axis_boundaries(image_px: int, canvas_mm: float, printable_mm: float) -> Li
     boundaries = [0]
     for i in range(1, count):
         edge = int(round(i * printable_mm * px_per_mm))
-        edge = max(0, min(image_px, edge))
+        # Skip an edge that rounds onto its predecessor or onto the final
+        # pinned edge, which would otherwise yield an empty (blank-page) tile.
+        if edge <= boundaries[-1] or edge >= image_px:
+            continue
         boundaries.append(edge)
     boundaries.append(image_px)
     return boundaries

@@ -341,6 +341,11 @@ class ParamWidget(QWidget):
             elif self._spec.ptype == ParamType.CHOICE:
                 if self._combo is not None:
                     idx = self._index_for_value(value)
+                    if idx < 0:
+                        # Unknown value (e.g. a renamed preset in an old
+                        # session): show the default rather than silently
+                        # leaving the combo out of step with the control.
+                        idx = self._index_for_value(self._spec.default)
                     if idx >= 0:
                         self._combo.setCurrentIndex(idx)
             elif self._spec.ptype == ParamType.TEXT:

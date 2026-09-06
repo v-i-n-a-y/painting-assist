@@ -37,8 +37,10 @@ import os
 import platform as _platform_mod
 import re
 import subprocess
+import shutil
 import sys
 import tempfile
+import threading
 import urllib.request
 from typing import Optional
 
@@ -162,7 +164,11 @@ def is_update_candidate(remote_tag: str, local_version: str, channel: str) -> bo
     if channel == CHANNEL_DEVELOPER:
         same_version = parse_version(remote_tag) == parse_version(local_version)
         different_tag = remote_tag.strip().lstrip("vV") != local_version.strip()
-        return same_version and different_tag
+        # A same-version prerelease is older than the final, never an update.
+        downgrade = is_prerelease_tag(remote_tag) and not is_prerelease_tag(
+            local_version
+        )
+        return same_version and different_tag and not downgrade
     return False
 
 
@@ -196,6 +202,8 @@ def pick_asset(
     if suffix is None:
         return None
     for asset in assets:
+        if not isinstance(asset, dict):
+            continue
         name = (asset.get("name") or "").lower()
         if name.endswith(suffix):
             return asset
@@ -271,6 +279,20 @@ def open_installer(path: str) -> None:
 # ---------------------------------------------------------------------------- #
 # Off-thread task plumbing (mirrors render_controller's discipline)
 # ---------------------------------------------------------------------------- #
+def _emit(signal, *args) -> None:
+    """Emit from a worker thread, tolerating a signal holder Qt already deleted.
+
+    A worker that outlives the window (close during a check or download) would
+    otherwise raise ``RuntimeError: Internal C++ object already deleted`` on
+    the pool thread, which lands in the threading excepthook as a spurious
+    crash report at exit.
+    """
+    try:
+        signal.emit(*args)
+    except RuntimeError:
+        pass
+
+
 class _CheckSignals(QObject):
     """Signal holder for a :class:`_CheckTask` (a QRunnable cannot have signals).
 
@@ -309,20 +331,23 @@ class _CheckTask(QRunnable):
             )
             with urllib.request.urlopen(req, timeout=_NET_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
+            releases = payload if isinstance(payload, list) else []
+            release = pick_latest_release(releases, self._channel)
+            if release is None:
+                _emit(self._signals.done, None, None, "No releases found yet.")
+                return
+            tag = release.get("tag_name") or release.get("name") or ""
+            assets = release.get("assets") or []
+            if not isinstance(assets, list):
+                assets = []
+            asset = pick_asset(assets, sys.platform, _platform_mod.machine())
         except Exception as exc:  # noqa: BLE001 - all failures become checkFailed
+            # Parsing is inside the try too: a malformed release payload must
+            # still resolve the check, or the UI waits on "Checking…" forever.
             _log.warning("Update check failed", exc_info=True)
-            self._signals.done.emit(None, None, str(exc))
+            _emit(self._signals.done, None, None, str(exc))
             return
-
-        releases = payload if isinstance(payload, list) else []
-        release = pick_latest_release(releases, self._channel)
-        if release is None:
-            self._signals.done.emit(None, None, "No releases found yet.")
-            return
-        tag = release.get("tag_name") or release.get("name") or ""
-        assets = release.get("assets") or []
-        asset = pick_asset(assets, sys.platform, _platform_mod.machine())
-        self._signals.done.emit(tag, asset, None)
+        _emit(self._signals.done, tag, asset, None)
 
 
 class _DownloadSignals(QObject):
@@ -341,18 +366,30 @@ class _DownloadTask(QRunnable):
 
     _CHUNK = 64 * 1024
 
-    def __init__(self, asset: dict, signals: _DownloadSignals) -> None:
+    def __init__(
+        self,
+        asset: dict,
+        signals: _DownloadSignals,
+        cancel: Optional[threading.Event] = None,
+    ) -> None:
         super().__init__()
         self._asset = asset
         self._signals = signals
+        self._cancel = cancel if cancel is not None else threading.Event()
 
     def run(self) -> None:  # noqa: D401 - QRunnable entry point
-        """Stream the asset to a temp file, emitting progress then ``done``."""
+        """Stream the asset to a temp file, emitting progress then ``done``.
+
+        Checks ``cancel`` between chunks so a window close does not block on a
+        multi-hundred-megabyte installer; a cancelled or failed download removes
+        its temp directory rather than leaving a partial installer behind.
+        """
         url = self._asset.get("browser_download_url")
         name = self._asset.get("name") or "PaintingAssist-installer"
         if not url:
-            self._signals.done.emit(None, "Asset has no download URL")
+            _emit(self._signals.done, None, "Asset has no download URL")
             return
+        dest_dir = None
         try:
             dest_dir = tempfile.mkdtemp(prefix="painting-assist-update-")
             dest = os.path.join(dest_dir, name)
@@ -363,6 +400,8 @@ class _DownloadTask(QRunnable):
                 last_pct = -1
                 with open(dest, "wb") as fh:
                     while True:
+                        if self._cancel.is_set():
+                            raise _Cancelled()
                         chunk = resp.read(self._CHUNK)
                         if not chunk:
                             break
@@ -372,15 +411,31 @@ class _DownloadTask(QRunnable):
                             pct = int(read * 100 / total)
                             if pct != last_pct:
                                 last_pct = pct
-                                self._signals.progress.emit(pct)
+                                _emit(self._signals.progress, pct)
             if total <= 0:
                 # Unknown length: report completion so the UI can settle at 100%.
-                self._signals.progress.emit(100)
+                _emit(self._signals.progress, 100)
+        except _Cancelled:
+            _log.info("Update download cancelled")
+            _remove_tree(dest_dir)
+            _emit(self._signals.done, None, "Download cancelled.")
+            return
         except Exception as exc:  # noqa: BLE001 - failures become an error emit
             _log.warning("Update download failed", exc_info=True)
-            self._signals.done.emit(None, str(exc))
+            _remove_tree(dest_dir)
+            _emit(self._signals.done, None, str(exc))
             return
-        self._signals.done.emit(dest, None)
+        _emit(self._signals.done, dest, None)
+
+
+class _Cancelled(Exception):
+    """Raised inside a download loop when its cancel event is set."""
+
+
+def _remove_tree(path: Optional[str]) -> None:
+    """Best-effort removal of a download temp directory."""
+    if path:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _content_length(resp) -> int:
@@ -432,6 +487,8 @@ class UpdateChecker(QObject):
         self._dl_signals = _DownloadSignals()
         self._dl_signals.progress.connect(self.downloadProgress, Qt.QueuedConnection)
         self._dl_signals.done.connect(self._on_download_done, Qt.QueuedConnection)
+        self._dl_cancel = threading.Event()
+        self._downloading = False
 
     # ------------------------------------------------------------------ #
     # Public API (GUI thread)
@@ -462,7 +519,31 @@ class UpdateChecker(QObject):
         separate step so the UI can prompt before launching). Failures surface
         through :attr:`checkFailed` rather than raising.
         """
-        self._pool.start(_DownloadTask(asset, self._dl_signals))
+        if self._downloading:
+            # A second click mid-download would interleave progress from two
+            # workers and fire downloadReady twice; the first one wins.
+            return
+        self._downloading = True
+        self._dl_cancel.clear()
+        self._pool.start(_DownloadTask(asset, self._dl_signals, self._dl_cancel))
+
+    def shutdown(self) -> None:
+        """Stop delivering results: cancel any download and detach the workers.
+
+        Call before the owning window is torn down. In-flight workers finish
+        (or, for a download, stop at the next chunk) and their emits go nowhere,
+        so nothing lands in a destroyed window.
+        """
+        self._dl_cancel.set()
+        for signal, slot in (
+            (self._check_signals.done, self._on_check_done),
+            (self._dl_signals.progress, self.downloadProgress),
+            (self._dl_signals.done, self._on_download_done),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
 
     # ------------------------------------------------------------------ #
     # Internals (GUI thread via QueuedConnection)
@@ -487,6 +568,7 @@ class UpdateChecker(QObject):
 
     def _on_download_done(self, path: object, error: object) -> None:
         """Emit :attr:`downloadReady` on success, else :attr:`checkFailed`."""
+        self._downloading = False
         if error is not None:
             self.checkFailed.emit(str(error))
             return

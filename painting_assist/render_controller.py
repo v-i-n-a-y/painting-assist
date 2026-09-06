@@ -150,6 +150,8 @@ class RenderController(QObject):
     # trailing full-quality pass debounces longer to coalesce the burst.
     DEBOUNCE_MS = 24
     DEBOUNCE_FULL_MS = 60
+    # Longest the window close will block for in-flight pool workers.
+    SHUTDOWN_WAIT_MS = 5000
 
     def __init__(
         self,
@@ -216,7 +218,11 @@ class RenderController(QObject):
             self._signals.done.disconnect(self._on_task_done)
         except (RuntimeError, TypeError):  # already disconnected / no connection
             pass
-        self._pool.waitForDone()
+        # Bounded: the pool is the global one, shared with image decodes and
+        # the updater. Their emits are disconnected/guarded by now, so a
+        # straggler finishing after the deadline is harmless, whereas an
+        # unbounded wait would freeze the close on a slow worker.
+        self._pool.waitForDone(self.SHUTDOWN_WAIT_MS)
 
     def invalidate_source(self) -> None:
         """Forget cached derivations of the current source (GUI thread).

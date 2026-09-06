@@ -161,7 +161,15 @@ def _nnls(matrix: np.ndarray, target: np.ndarray) -> np.ndarray:
             trial = np.zeros(n)
             trial[idx] = sol
             bad = idx[sol <= tol]
-            ratios = weights[bad] / (weights[bad] - trial[bad])
+            denom = weights[bad] - trial[bad]
+            safe = np.abs(denom) > tol
+            if not np.any(safe):
+                # Passive weight and its trial are both ~0 (collinear or
+                # duplicate tube colours): nothing to step toward.
+                weights[:] = 0.0
+                weights[idx] = np.clip(sol, 0.0, None)
+                break
+            ratios = weights[bad][safe] / denom[safe]
             alpha = float(np.min(ratios))
             weights = weights + alpha * (trial - weights)
             passive[np.abs(weights) < tol] = False

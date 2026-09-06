@@ -198,12 +198,16 @@ def map_image(img: np.ndarray, candidates: np.ndarray, levels: int | None = None
     if candidates.size == 0 or img.size == 0:
         return img.copy()
 
-    levels = _DEFAULT_LUT_LEVELS if levels is None else int(levels)
+    levels = _DEFAULT_LUT_LEVELS if levels is None else max(2, int(levels))
 
     lut = _build_lut(candidates, levels)
 
-    src = img.astype(np.int64)
-    idx = src * (levels - 1) // 255  # (H, W, 3) bin indices per channel
+    # Per-channel bin index via a 256-entry table: avoids materialising an
+    # int64 copy of the whole frame (2.4 GB at 100 MP) just to divide it.
+    bin_of = (np.arange(256, dtype=np.int64) * (levels - 1) // 255).astype(
+        np.uint8 if levels <= 256 else np.int64
+    )
+    idx = bin_of[img]  # (H, W, 3) bin indices per channel
     out = lut[idx[..., 0], idx[..., 1], idx[..., 2]]
     return np.ascontiguousarray(out, dtype=np.uint8)
 
